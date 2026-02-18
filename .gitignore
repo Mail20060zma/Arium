@@ -1,0 +1,82 @@
+# Python cache
+__pycache__/
+*.pyc
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# API keys and secrets
+config_local.yaml
+*.env
+
+# Data files
+*.jsonl
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model files - IGNORE ALL MODELS
+model/
+*/model/
+models/
+*/models/
+
+# Binary model formats
+*.bin
+*.model
+*.safetensors
+*.pt
+*.pth
+*.pth.tar
+*.mdl
+*.fst
+*.carpa
+*.dubm
+*.ie
+*.mat
+*.stats
+*.ref
+*.mllist
+*.params
+
+# Logs
+logs/
+*.log
+audio_output/
+audio_files/
+
+# Temporary files
+tmp/
+temp/
+cache/
+
+# Test files
+test_*.py
+tests/__pycache__/
+htmlcov/
+.coverage
+
+# Jupyter
+.ipynb_checkpoints
+*.ipynb
+
+# Local development
+local_*
+dev_*
