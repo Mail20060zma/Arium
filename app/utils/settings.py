@@ -30,8 +30,12 @@ class Settings:
     "current_model": "stepfun/step-3.5-flash:free",
     "stt_provider": "whisper",
     "stt_model": "small",
+    "tts_backend": "silero",
     "tts_silero_model": "v5_ru",
-    "tts_speaker": "kseniya"
+    "tts_speaker": "kseniya",
+    "tts_xtts_model": "v2.0.2",
+    "tts_xtts_speaker": "",
+    "tts_streaming": True
     }
     """
     
@@ -70,8 +74,12 @@ class Settings:
             "current_model": "qwen2.5-coder-7b",
             "stt_provider": "whisper",
             "stt_model": "small",
+            "tts_backend": "silero",
             "tts_silero_model": "v5_ru",
-            "tts_speaker": "kseniya"
+            "tts_speaker": "kseniya",
+            "tts_xtts_model": "v2.0.2",
+            "tts_xtts_speaker": "",
+            "tts_streaming": True
         }
     
     def _load(self) -> None:

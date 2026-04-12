@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-"""
-Airi 2.0 - Speech Processing System
-Три потока: Запись > ИИ > Воспроизведение (с разбиением на предложения)
-"""
 import os
 import sys
 import json
@@ -21,7 +16,8 @@ from scipy.io import wavfile
 sys.path.insert(0, str(Path(__file__).parent))
 
 from STT import create_stt
-from TTS.silero import SileroTTS
+from TTS import get_tts_engine
+from TTS.base import BaseTTS
 from LLM.openrouter_handler import OpenRouterHandler
 from utils.settings import Settings
 from tools.text_processing import split_text_to_sentences, prepare_messages_for_api
@@ -65,7 +61,7 @@ state_lock = threading.Lock()
 # Глобальные обработчики
 settings: Optional[Settings] = None
 llm_handler: Optional[OpenRouterHandler] = None
-tts_model: Optional[SileroTTS] = None
+tts_model: Optional[BaseTTS] = None
 stt_backend = None
 tool_executor: Optional[ToolExecutor] = None
 
@@ -116,16 +112,17 @@ def initialize_tts() -> bool:
     """Инициализирует TTS."""
     global tts_model, settings
     try:
-        speaker = settings.get('tts_speaker', 'kseniya')
-        model_id = settings.get('tts_silero_model', 'v5_ru')
+        # Load and set up global streaming controls
+        tts_model = get_tts_engine(settings)
+        tts_model.load_model()
         
-        tts_model = SileroTTS(
-            language='ru',
-            model_id=model_id,
-            speaker=speaker,
-            device='cuda' if __import__('torch').cuda.is_available() else 'cpu'
-        )
-        logger.info(f"✅ TTS инициализирован: {model_id}, спикер: {speaker}")
+        # Configure streaming vs non-streaming mode for audio tools
+        is_streaming = settings.get('tts_streaming', True)
+        audio_tools.set_tts_streaming(is_streaming)
+        audio_tools.set_ai_response_queue(ai_response_queue)
+        audio_tools.set_abort_event(app_state.playback_stop_event)
+        
+        logger.info(f"✅ TTS инициализирован (Streaming: {is_streaming})")
         return True
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации TTS: {e}")
@@ -433,8 +430,28 @@ def thread_play_response():
         logger.info("✅ pygame.mixer инициализирован")
     except Exception as e:
         logger.warning(f"⚠️ pygame.mixer недоступен: {e}")
+        
+    try:
+        import sounddevice as sd
+        sd_available = True
+    except ImportError:
+        logger.warning("⚠️ sounddevice недоступен, streaming аудио не будет работать")
+        sd_available = False
     
     history_file = Path(__file__).parent / 'data' / 'chat_history.json'
+    
+    # State for streaming
+    stream_out = None
+    
+    def get_sd_stream(samplerate):
+        nonlocal stream_out
+        if stream_out and stream_out.samplerate != samplerate:
+            stream_out.close()
+            stream_out = None
+        if not stream_out:
+            stream_out = sd.OutputStream(samplerate=samplerate, channels=1, dtype='float32')
+            stream_out.start()
+        return stream_out
     
     def play_audio_file(filepath: str) -> bool:
         """Воспроизводит аудиофайл с несколькими методами fallback."""
@@ -532,6 +549,24 @@ def thread_play_response():
                 
                 # Сохраняем историю
                 save_history_to_file(history_file, app_state.history)
+            
+            # ============ STREAMING (ЧАНКИ) ============
+            elif isinstance(item, dict) and item.get('type') == 'audio_chunk':
+                if not sd_available:
+                    continue
+                chunk = item.get('chunk')
+                rate = item.get('sample_rate', 24000)
+                try:
+                    st = get_sd_stream(rate)
+                    st.write(chunk)
+                except Exception as e:
+                    logger.error(f"🔊 Ошибка воспроизведения чанка: {e}")
+                    
+            elif isinstance(item, dict) and item.get('type') == 'audio_stream_start':
+                logger.info("🔊 Начало потокового воспроизведения аудио...")
+                
+            elif isinstance(item, dict) and item.get('type') == 'audio_stream_end':
+                logger.info("🔊 Конец потокового воспроизведения.")
             
             # ============ ОБРАБОТКА ТЕКСТА (старый формат) ============
             elif isinstance(item, str):

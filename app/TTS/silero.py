@@ -6,13 +6,16 @@ import threading
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Union, Callable
+from typing import Optional, Union, Callable, Generator
 import time
 from omegaconf import OmegaConf
 import requests
 from tqdm import tqdm
+import numpy as np
 
-class SileroTTS:
+from .base import BaseTTS
+
+class SileroTTS(BaseTTS):
     """
     Оптимизированный класс для синтеза речи с поддержкой текста, SSML и автоопределения режима
     """
@@ -35,6 +38,11 @@ class SileroTTS:
         
         # Загружаем модель при инициализации
         self.load_model()
+
+    @property
+    def sample_rate(self) -> int:
+        """Возвращает частоту дискретизации сгенерированного аудио."""
+        return 48000
     
     def _get_device(self, device: Optional[Union[str, torch.device]] = None) -> torch.device:
         """Автоматически определяет доступное устройство (CUDA если доступна)"""
@@ -160,6 +168,63 @@ class SileroTTS:
             except Exception as e:
                 print(f"❌ Ошибка загрузки: {str(e)}")
                 raise RuntimeError(f"Не удалось загрузить модель: {str(e)}")
+
+    def synthesize_to_file(self, text: str, output_path: str, speaker: Optional[str] = None) -> str:
+        """
+        Синтезирует полный текст и сохраняет в WAV файл.
+        Возвращает путь к сгенерированному файлу.
+        """
+        speaker_to_use = speaker if speaker else self.speaker
+        return self.synthesize_auto_and_save(
+            text, 
+            output_file=str(output_path), 
+            speaker=speaker_to_use, 
+            sample_rate=self.sample_rate
+        )
+
+    def stream_audio(self, text: str, abort_event: threading.Event, speaker: Optional[str] = None) -> Generator[np.ndarray, None, None]:
+        """
+        Генерирует аудио потоково (чанками).
+        Если abort_event.is_set() становится True, генерация должна быть немедленно прервана.
+        Yields numpy arrays (float32).
+        """
+        if not self._model_loaded:
+            raise RuntimeError("Модель не загружена")
+            
+        speaker_to_use = speaker if speaker else self.speaker
+        
+        # Если SSML разметка, не разбиваем текст на куски
+        if '<speak' in text or '<prosody' in text or '<break' in text:
+            if abort_event.is_set():
+                return
+            audio = self.synthesize_ssml(text, speaker=speaker_to_use, sample_rate=self.sample_rate)
+            if not abort_event.is_set():
+                yield audio.cpu().numpy()
+        else:
+            chunks = self._split_text(text)
+            for chunk in chunks:
+                if abort_event.is_set():
+                    break
+                
+                try:
+                    audio = self.model.apply_tts(
+                        text=chunk,
+                        speaker=speaker_to_use,
+                        sample_rate=self.sample_rate
+                    )
+                except TypeError:
+                    audio = self.model.apply_tts(
+                        text=chunk,
+                        speaker=speaker_to_use,
+                        sample_rate=self.sample_rate,
+                        put_accent=True,
+                        put_yo=True
+                    )
+                
+                if abort_event.is_set():
+                    break
+                    
+                yield audio.cpu().numpy()
     
     def _split_text(self, text: str, max_length: int = 500) -> list:
         """Разбивает текст на части по предложениям"""
@@ -348,10 +413,11 @@ class SileroTTS:
     def save_audio(self, audio: torch.Tensor, filename: str, sample_rate: int = 48000) -> str:
         """Сохраняет аудио в файл WAV"""
         print(f"📁 Сохраняем аудио в {filename}")
-        os.makedirs(os.path.dirname(os.path.abspath(filename.parent)), exist_ok=True)
-        filename = filename if filename.suffix == '.wav' else filename.with_suffix('.wav')
-        sf.write(filename, audio.cpu().numpy(), sample_rate)
-        return os.path.abspath(filename)
+        os.makedirs(os.path.dirname(os.path.abspath(filename)), exist_ok=True)
+        filename_path = Path(filename)
+        filename_path = filename_path if filename_path.suffix == '.wav' else filename_path.with_suffix('.wav')
+        sf.write(str(filename_path), audio.cpu().numpy(), sample_rate)
+        return os.path.abspath(filename_path)
     
     # ============ СИНХРОННЫЕ МЕТОДЫ СОХРАНЕНИЯ ============
     def synthesize_text_and_save(self, 
@@ -537,30 +603,3 @@ if False:
     thread.join(timeout=5.0)
     print("\n🎉 Все задачи выполнены!")
 
-
-
-# tts = SileroTTS(language='ru', model_id='v5_ru', speaker='xenia')  # xenia → kseniya автоматически
-# thread = tts.synthesize_auto_async(
-#         input_text="""
-#               <speak>
-#               <p>
-#                   Когда я просыпаюсь, <prosody rate="x-slow">я говорю довольно медленно</prosody>.
-#                   Hello world! watch me speak English too!,
-#                   <prosody pitch="x-high"> а могу говорить тоном выше </prosody>,
-#                   или <prosody pitch="x-low">наоборот, ниже</prosody>.
-#                   Пот+ом, если повезет – <prosody rate="fast">я могу говорить и довольно быстро.</prosody>
-#                   А еще я умею делать паузы любой длины, например, две секунды <break time="2000ms"/>.
-#                   <p>
-#                     Также я умею делать паузы между параграфами.
-#                   </p>
-#                   <p>
-#                     <s>И также я умею делать паузы между предложениями</s>
-#                     <s>Вот например как сейчас</s>
-#                   </p>
-#               </p>
-#               </speak>
-#               """,
-#         output_file= Path(__file__).parent.parent / "audio_files" / "audio.wav",  # <--- ничего не указывать 
-#     )
-# thread.join()
-# print("\n🎉 Все задачи выполнены!")

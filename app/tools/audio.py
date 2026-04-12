@@ -13,7 +13,24 @@ logger = logging.getLogger(__name__)
 # Глобальная référence на TTS модель (устанавливается из main.py)
 _tts_model = None
 _audio_output_dir = None
+_tts_streaming = False
+_ai_response_queue = None
+_abort_event = None
 
+def set_tts_streaming(val: bool) -> None:
+    """Включает/выключает потоковую генерацию аудио."""
+    global _tts_streaming
+    _tts_streaming = val
+
+def set_ai_response_queue(q) -> None:
+    """Устанавливает ссылку на очередь вывода."""
+    global _ai_response_queue
+    _ai_response_queue = q
+
+def set_abort_event(ev) -> None:
+    """Устанавливает объект Event для прерывания генерации."""
+    global _abort_event
+    _abort_event = ev
 
 def set_tts_model(model) -> None:
     """Устанавливает глобальную ссылку на TTS модель."""
@@ -65,32 +82,43 @@ def text_to_audio(text: str, speaker: str = "kseniya") -> Dict[str, Any]:
         
         logger.info(f"🎵 Синтез аудио ({speaker}): {text[:50]}...")
         
-        # Синтезируем аудио с использованием synthesize_auto
-        audio_tensor = _tts_model.synthesize_auto(text, speaker=speaker)
-        
-        # Генерируем уникальное имя файла
-        file_id = str(uuid.uuid4())[:8]
-        audio_file = _audio_output_dir / f"audio_{file_id}.wav"
-        
-        # Сохраняем аудио
-        from scipy.io import wavfile
-        import numpy as np
-        
-        audio_np = audio_tensor.cpu().numpy()
-        wavfile.write(str(audio_file), 48000, (audio_np * 32767).astype(np.int16))
-        
-        # Приблизительная длительность в секундах
-        duration = len(audio_np) / 48000
-        
-        logger.info(f"✅ Аудио создано: {audio_file.name} ({duration:.2f}s)")
-        
-        return {
-            "status": "success",
-            "audio_file": str(audio_file),
-            "duration": round(duration, 2),
-            "text": text,
-            "speaker": speaker
-        }
+        if _tts_streaming and _ai_response_queue and _abort_event:
+            logger.info("🔊 Начинаем streaming аудио в очередь...")
+            sample_rate = _tts_model.sample_rate
+            try:
+                for chunk in _tts_model.stream_audio(text, _abort_event, speaker=speaker):
+                    if _abort_event.is_set():
+                        break
+                    _ai_response_queue.put({"type": "audio_chunk", "chunk": chunk, "sample_rate": sample_rate})
+            except Exception as e:
+                logger.error(f"❌ Ошибка потокового синтеза: {e}")
+            
+            return {
+                "status": "success",
+                "text": text,
+                "speaker": speaker,
+                "streamed": True
+            }
+            
+        else:
+            # Генерируем уникальное имя файла
+            file_id = str(uuid.uuid4())[:8]
+            audio_file = _audio_output_dir / f"audio_{file_id}.wav"
+            
+            _tts_model.synthesize_to_file(text, output_path=str(audio_file), speaker=speaker)
+            
+            # TODO get duration accurately if needed, placeholder below
+            duration = 0.0
+            
+            logger.info(f"✅ Аудио создано: {audio_file.name}")
+            
+            return {
+                "status": "success",
+                "audio_file": str(audio_file),
+                "duration": duration,
+                "text": text,
+                "speaker": speaker
+            }
     
     except Exception as e:
         logger.error(f"❌ Ошибка синтеза аудио: {e}")

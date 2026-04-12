@@ -1,4 +1,4 @@
-# Airi - Многопоточная система обработки речи
+# Arium - Многопоточная система обработки речи
 
 > Полностью переработанная архитектура с использованием OpenAI SDK (OpenRouter), многопоточностью и параллельной обработкой
 
@@ -77,6 +77,72 @@ state_lock         # Lock → синхронизация доступа
 
 ```bash
 pip install -r requirements.txt
+```
+
+### Ручная установка
+
+Файл [requirements.txt](requirements.txt) теперь рассчитан на ручную установку в CPU-профиле. Если нужен CUDA-профиль, используйте отдельные файлы в папке requirements:
+
+```bash
+pip install -r requirements/base.txt
+pip install -r requirements/torch-cpu.txt --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+```
+
+Для CUDA 12.1:
+
+```bash
+pip install -r requirements/base.txt
+pip install -r requirements/torch-cu121.txt --index-url https://download.pytorch.org/whl/cu121 --extra-index-url https://pypi.org/simple
+```
+
+Для CUDA 12.4:
+
+```bash
+pip install -r requirements/base.txt
+pip install -r requirements/torch-cu124.txt --index-url https://download.pytorch.org/whl/cu124 --extra-index-url https://pypi.org/simple
+```
+
+### Установка через мини-установщик (рекомендуется)
+
+Установщик автоматически:
+- проверяет Python 3.11 (или ставит его в режиме `auto-install`)
+- создает виртуальное окружение
+- устанавливает зависимости проекта
+- ставит `torch` в выбранном профиле: `CPU`, `CUDA 12.1`, `CUDA 12.4` или `Auto`
+
+Windows PowerShell:
+
+```powershell
+./install.ps1
+./install.ps1 -Profile cpu -PythonMode check-only
+./install.ps1 -Profile cu121 -PythonMode auto-install
+```
+
+Windows CMD:
+
+```bat
+install.bat auto check-only .venv
+install.bat cu121 auto-install .venv
+```
+
+Linux/macOS:
+
+```bash
+chmod +x install.sh
+./install.sh auto check-only .venv
+./install.sh cpu auto-install .venv
+```
+
+Сборка `.exe` установщика (Windows):
+
+```powershell
+./scripts/build_installer_exe.ps1
+```
+
+После установки запуск проекта:
+
+```bash
+python app/main.py
 ```
 
 ### 2. API ключ
