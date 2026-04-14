@@ -71,84 +71,53 @@ state_lock         # Lock → синхронизация доступа
 
 ---
 
-## 🚄 Быстрый старт
+## 🚄 Быстрая установка
 
-### 1. Установка
+### Способ 1: Через установщик (РЕКОМЕНДУЕТСЯ) ⭐
+
+Установщик проверяет Python 3.11, создает окружение и устанавливает все зависимости автоматически.
+
+**Windows PowerShell:**
+```powershell
+./install.ps1 -Profile cu130 -PythonMode auto-install
+```
+
+**Linux/macOS:**
+```bash
+chmod +x install.sh
+./install.sh cu130 auto-install
+```
+
+Для CPU-only версии (без GPU):
+```powershell
+./install.ps1 -Profile cpu
+```
+
+### Способ 2: Ручная установка
 
 ```bash
+# 1. Создайте окружение
+python -m venv .venv
+
+# 2. Активируйте
+.venv\Scripts\activate        # Windows
+source .venv/bin/activate     # Linux/macOS
+
+# 3. Установите зависимости
 pip install -r requirements.txt
 ```
 
-### Ручная установка
-
-Файл [requirements.txt](requirements.txt) теперь рассчитан на ручную установку в CPU-профиле. Если нужен CUDA-профиль, используйте отдельные файлы в папке requirements:
-
+Для CPU-only:
 ```bash
 pip install -r requirements/base.txt
-pip install -r requirements/torch-cpu.txt --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
-```
-
-Для CUDA 12.1:
-
-```bash
-pip install -r requirements/base.txt
-pip install -r requirements/torch-cu121.txt --index-url https://download.pytorch.org/whl/cu121 --extra-index-url https://pypi.org/simple
-```
-
-Для CUDA 12.4:
-
-```bash
-pip install -r requirements/base.txt
-pip install -r requirements/torch-cu124.txt --index-url https://download.pytorch.org/whl/cu124 --extra-index-url https://pypi.org/simple
-```
-
-### Установка через мини-установщик (рекомендуется)
-
-Установщик автоматически:
-- проверяет Python 3.11 (или ставит его в режиме `auto-install`)
-- создает виртуальное окружение
-- устанавливает зависимости проекта
-- ставит `torch` в выбранном профиле: `CPU`, `CUDA 12.1`, `CUDA 12.4` или `Auto`
-
-Windows PowerShell:
-
-```powershell
-./install.ps1
-./install.ps1 -Profile cpu -PythonMode check-only
-./install.ps1 -Profile cu121 -PythonMode auto-install
-```
-
-Windows CMD:
-
-```bat
-install.bat auto check-only .venv
-install.bat cu121 auto-install .venv
-```
-
-Linux/macOS:
-
-```bash
-chmod +x install.sh
-./install.sh auto check-only .venv
-./install.sh cpu auto-install .venv
-```
-
-Сборка `.exe` установщика (Windows):
-
-```powershell
-./scripts/build_installer_exe.ps1
-```
-
-После установки запуск проекта:
-
-```bash
-python app/main.py
+pip install -r requirements/torch-cpu.txt --index-url https://download.pytorch.org/whl/cpu
 ```
 
 ### 2. API ключ
 
 ```bash
-set OPENROUTER_API_KEY=sk_ваш_ключ
+set OPENROUTER_API_KEY=sk_ваш_ключ        # Windows
+export OPENROUTER_API_KEY=sk_ваш_ключ     # Linux/macOS
 ```
 
 ### 3. Запуск
@@ -156,14 +125,6 @@ set OPENROUTER_API_KEY=sk_ваш_ключ
 ```bash
 python app/main.py
 ```
-
-### 4. Использование
-
-Просто говорите в микрофон! Приложение автоматически:
-- Распознает речь
-- Отправляет к ИИ
-- Обрабатывает Tool Calls
-- Синтезирует и воспроизводит ответ
 
 **Остановка**: `Ctrl+C`
 

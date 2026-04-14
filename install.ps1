@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("auto", "cpu", "cu121", "cu124")]
+    [ValidateSet("auto", "cpu", "cu130")]
     [string]$Profile = "auto",
 
     [ValidateSet("check-only", "auto-install")]

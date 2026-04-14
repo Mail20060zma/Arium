@@ -23,14 +23,12 @@ REQ_DIR = ROOT_DIR / "requirements"
 BASE_REQUIREMENTS = REQ_DIR / "base.txt"
 TORCH_REQUIREMENTS = {
     "cpu": REQ_DIR / "torch-cpu.txt",
-    "cu121": REQ_DIR / "torch-cu121.txt",
-    "cu124": REQ_DIR / "torch-cu124.txt",
+    "cu130": REQ_DIR / "torch-cu130.txt",
 }
 
 TORCH_INDEX_URL = {
     "cpu": "https://download.pytorch.org/whl/cpu",
-    "cu121": "https://download.pytorch.org/whl/cu121",
-    "cu124": "https://download.pytorch.org/whl/cu124",
+    "cu130": "https://download.pytorch.org/whl/cu130",
 }
 
 
@@ -98,7 +96,7 @@ def detect_gpu_profile() -> str:
     if gpu_check.returncode != 0:
         return "cpu"
 
-    return "cu121"
+    return "cu130"
 
 
 def try_auto_install_python() -> None:
@@ -231,7 +229,7 @@ def print_finish_info(venv_dir: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Arium installer")
-    parser.add_argument("--profile", choices=["auto", "cpu", "cu121", "cu124"], default="auto")
+    parser.add_argument("--profile", choices=["auto", "cpu", "cu130"], default="auto")
     parser.add_argument("--python-mode", choices=["check-only", "auto-install"], default="check-only")
     parser.add_argument("--venv", default=".venv")
     parser.add_argument("--non-interactive", action="store_true")
@@ -250,12 +248,10 @@ def select_profile(initial_profile: str, non_interactive: bool) -> str:
     return prompt_choice(
         "Выберите профиль torch:",
         {
-            "auto": "Автоопределение (рекомендовано)",
             "cpu": "CPU-only",
-            "cu121": "CUDA 12.1",
-            "cu124": "CUDA 12.4",
+            "cu130": "CUDA 13.0 (рекомендовано для RTX 50-series)",
         },
-        default="auto",
+        default="cu130",
     )
 
 

@@ -1,3 +1,8 @@
+#!/usr/bin/env python3
+"""
+Airi 2.0 - Speech Processing System
+Три потока: Запись > ИИ > Воспроизведение (с разбиением на предложения)
+"""
 import os
 import sys
 import json
@@ -16,8 +21,8 @@ from scipy.io import wavfile
 sys.path.insert(0, str(Path(__file__).parent))
 
 from STT import create_stt
-from TTS import get_tts_engine
-from TTS.base import BaseTTS
+from tts_backends import get_tts_engine
+from tts_backends.base import BaseTTS
 from LLM.openrouter_handler import OpenRouterHandler
 from utils.settings import Settings
 from tools.text_processing import split_text_to_sentences, prepare_messages_for_api

@@ -2,16 +2,25 @@
 soundfile==0.12.1
 omegaconf==2.3.0
 IPython==9.9.0
-scipy>=1.11.4,<1.14
+scipy==1.13.1
 
 # LLM
-openai>=1.3.0
-requests>=2.31.0
+openai==1.59.0
+requests==2.32.3
 
 # STT
 openai-whisper==20250625
 vosk==0.3.45
 SpeechRecognition==3.14.5
 
+# TTS
+coqui-tts[codec]==0.27.5
+transformers==4.57.6
+huggingface_hub==0.24.6
+pyaudio==0.2.13
+
 # Audio playback
-pygame>=2.5.0
+pygame==2.5.3
+sounddevice==0.5.1
+pipwin==0.5.2
+numpy==2.2.6

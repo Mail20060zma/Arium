@@ -68,7 +68,6 @@ temp/
 cache/
 
 # Test files
-test_*.py
 tests/__pycache__/
 htmlcov/
 .coverage

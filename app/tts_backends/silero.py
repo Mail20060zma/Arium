@@ -90,6 +90,7 @@ class SileroTTS(BaseTTS):
                 models_path = Path(__file__).parent.parent / 'model' / "silero" / 'silero_models.yml'
                 
                 if not models_path.exists():
+                    models_path.parent.mkdir(parents=True, exist_ok=True)
                     torch.hub.download_url_to_file(models_url, str(models_path), progress=False)
                 
                 models = OmegaConf.load(models_path)
