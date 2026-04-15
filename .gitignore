@@ -80,5 +80,12 @@ htmlcov/
 local_*
 dev_*
 .github
+
+
 123.py
 123123.py
+12*
+12*.py
+
+
+
