@@ -66,6 +66,7 @@ audio_files/
 tmp/
 temp/
 cache/
+test/
 
 # Test files
 tests/__pycache__/
@@ -86,6 +87,6 @@ dev_*
 123123.py
 12*
 12*.py
-
+chat_history.json
 
 

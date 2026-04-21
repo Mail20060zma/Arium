@@ -1,14 +1,31 @@
 {
   "model": {
-    "qwen2.5-coder-7b": {
-      "model": "qwen2.5-coder:7b",
+    "qwen3.5-4b": {
+      "model": "qwen3.5-4b",
       "api_key": "",
       "provider": "ollama",
-      "model_id": "qwen2.5-coder-7b",
-      "model_name": "Qwen2.5-Coder 7B"
+      "model_id": "qwen3.5-4b",
+      "model_name": "Qwen2.5-Coder 7B",
+      "base_url": "http://127.0.0.1:1234"
+    },
+    "meta-llama/llama-4-scout-17b-16e-instruct":{
+      "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+      "api_key": "",
+      "provider": "g4f",
+      "model_id": "meta-llama/llama-4-scout-17b-16e-instruct",
+      "model_name": "meta-llama/llama-4-scout-17b-16e-instruct",
+      "base_url": "https://g4f.space/api/groq/model"
+    },
+    "openrouter/elephant-alpha":{
+      "model": "openrouter/elephant-alpha",
+      "api_key": "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",
+      "provider": "g4f",
+      "model_id": "openrouter/elephant-alpha",
+      "model_name": "openrouter/elephant-alpha",
+      "base_url": "https://openrouter.ai/api/v1"
     }
-  },
-  "current_model": "qwen2.5-coder-7b",
+  },  
+  "current_model": "qwen3.5-4b",
   "stt_provider": "whisper",
   "stt_model": "small",
   "tts_backend": "silero",
@@ -16,5 +33,9 @@
   "tts_speaker": "kseniya",
   "tts_xtts_model": "v2.0.2",
   "tts_xtts_speaker": "",
-  "tts_streaming": true
+  "tts_streaming": true,
+  "controls": {
+    "ptt_mode": true,
+    "ptt_keys": "alt"
+  }
 }

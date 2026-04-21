@@ -12,22 +12,16 @@ class Settings:
     Структура настроек:
     {
     "model": {
-        "qwen2.5-coder-7b": {
-        "model": "qwen2.5-coder:7b",
-        "api_key": "",
-        "provider": "ollama",
-        "model_id": "qwen2.5-coder-7b",
-        "model_name": "Qwen2.5-Coder 7B"
-        },
-        "stepfun/step-3.5-flash:free": {
-        "model": "stepfun/step-3.5-flash:free",
-        "api_key": "API_KEY",
-        "provider": "openrouter",
-        "model_id": "stepfun/step-3.5-flash:free",
-        "model_name": "stepfun/step-3.5-flash:free"
-        }
+        "meta-llama/llama-4-scout-17b-16e-instruct":{
+            "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+            "api_key": "",
+            "provider": "g4f",
+            "model_id": "meta-llama/llama-4-scout-17b-16e-instruct",
+            "model_name": "meta-llama/llama-4-scout-17b-16e-instruct",
+            "base_url": "https://g4f.space/api/groq/model"
+        }    
     },
-    "current_model": "stepfun/step-3.5-flash:free",
+    "current_model": "meta-llama/llama-4-scout-17b-16e-instruct",
     "stt_provider": "whisper",
     "stt_model": "small",
     "tts_backend": "silero",
@@ -40,19 +34,13 @@ class Settings:
     """
     
     def __init__(self, filepath: str = 'settings.json', create_if_missing: bool = True):
-        """
-        Инициализация менеджера настроек.
-        
-        Args:
-            filepath: Путь к файлу настроек
-            create_if_missing: Создавать файл с дефолтными настройками, если не существует
-        """
+        import copy
         self._filepath = Path(__file__).parent / filepath
         self._settings: Dict[str, Any] = {}
         self._default_settings = self._get_default_structure()
         
         if create_if_missing and not self._filepath.exists():
-            self._settings = self._default_settings.copy()
+            self._settings = copy.deepcopy(self._default_settings)
             self._save()
             print(f"✓ Создан файл настроек: {self._filepath.absolute()}")
         else:
@@ -68,7 +56,8 @@ class Settings:
                     "api_key": "",
                     "provider": "ollama",
                     "model_id": "qwen2.5-coder-7b",
-                    "model_name": "Qwen2.5-Coder 7B"
+                    "model_name": "Qwen2.5-Coder 7B",
+                    "base_url": "http://localhost:11434/v1"
                 }
             },
             "current_model": "qwen2.5-coder-7b",
@@ -79,52 +68,67 @@ class Settings:
             "tts_speaker": "kseniya",
             "tts_xtts_model": "v2.0.2",
             "tts_xtts_speaker": "",
-            "tts_streaming": True
+            "tts_streaming": True,
+            
+            # === AI Engine v2 ===
+            "memory": {
+                "context_window_size": 25,
+                "history_file": "chat_history.json"
+            },
+            "controls": {
+                "ptt_mode": "push_to_talk",
+                "ptt_keys": "alt"
+            }
         }
     
     def _load(self) -> None:
         """Загрузка настроек из файла с валидацией структуры."""
+        import copy
         try:
             if not self._filepath.exists():
-                self._settings = self._default_settings.copy()
+                self._settings = copy.deepcopy(self._default_settings)
                 self._save()
                 return
             
             with open(self._filepath, 'r', encoding='utf-8') as f:
                 loaded = json.load(f)
             
-            # Валидация и мерж с дефолтной структурой
+            # Валидация и мерж с дефолтной структурой (deep merge)
             self._settings = self._merge_with_defaults(loaded, self._default_settings)
             
         except json.JSONDecodeError as e:
             print(f"⚠ Ошибка парсинга {self._filepath}: {e}")
             print("   Используются дефолтные настройки.")
-            self._settings = self._default_settings.copy()
+            self._settings = copy.deepcopy(self._default_settings)
             self._save()
         except Exception as e:
             print(f"⚠ Ошибка загрузки настроек: {e}")
-            self._settings = self._default_settings.copy()
-    
+            self._settings = copy.deepcopy(self._default_settings)
+            
     def _merge_with_defaults(self, loaded: Dict, defaults: Dict) -> Dict:
-        """Мержит загруженные настройки с дефолтной структурой."""
-        result = defaults.copy()
+        """Рекурсивно мержит загруженные настройки с дефолтной структурой, сохраняя любые новые поля."""
+        import copy
+        result = copy.deepcopy(defaults)
         
-        for key, value in loaded.items():
-            if key == "model" and isinstance(value, dict):
-                # Мержим словарь моделей, сохраняя пользовательские
-                result["model"].update(value)
-            elif key in result:
-                result[key] = value
-            else:
-                print(f"  ⚠ Неизвестное поле '{key}' проигнорировано")
+        def _deep_update(target: dict, source: dict):
+            for k, v in source.items():
+                if isinstance(v, dict):
+                    if k not in target or not isinstance(target[k], dict):
+                        target[k] = {}
+                    _deep_update(target[k], v)
+                else:
+                    target[k] = copy.deepcopy(v)
+
+        # Мержим пользовательские настройки поверх дефолтных
+        _deep_update(result, loaded)
         
-        # Проверяем, что текущая модель существует в списке
-        if result["current_model"] not in result["model"]:
-            if result["model"]:
-                result["current_model"] = next(iter(result["model"]))
+        # Защита от несуществующей текущей модели
+        if result.get("current_model") not in result.get("model", {}):
+            if result.get("model"):
+                result["current_model"] = next(iter(result.get("model", {})))
                 print(f"  ⚠ current_model не найден, установлен: {result['current_model']}")
             else:
-                result["model"] = self._default_settings["model"].copy()
+                result["model"] = copy.deepcopy(self._default_settings["model"])
                 result["current_model"] = self._default_settings["current_model"]
                 print("  ⚠ Список моделей пуст, восстановлены дефолтные значения")
         
@@ -320,9 +324,15 @@ class Settings:
         # Если не найдено, пробуем из переменной окружения
         if not api_key:
             import os
-            api_key = os.getenv('OPENROUTER_API_KEY', '')
+            api_key = os.getenv('OPENROUTER_API_KEY', os.getenv('OPENAI_API_KEY', ''))
         
         return api_key
+    
+    def get_base_url_for_model(self, model_key: Optional[str] = None) -> str:
+        """Получает base_url для кастомных/локальных серверов."""
+        model = model_key or self.get('current_model')
+        base_url = self.get('model', {}).get(model, {}).get('base_url', '')
+        return base_url
     
     def get_model_id_for_model(self, model_key: Optional[str] = None) -> str:
         """Получает model_id для модели."""
