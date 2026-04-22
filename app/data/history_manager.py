@@ -114,14 +114,23 @@ class HistoryManager:
                     msg["id"] = f"msg_{int(time.time() * 1000)}"
                 self._history.append(msg)
                 
-            elif action == "truncate" or action == "update":
+            elif action == "truncate":
                 msg_id = event["msg_id"]
-                new_text = event["text"]
-                # Найти сообщение с конца и обновить
+                new_text = event.get("text", "")
                 for m in reversed(self._history):
-                    if m.get("id") == msg_id or m.get("role") == "assistant":
+                    if m.get("id") == msg_id:
                         m["content"] = new_text
-                        logger.debug(f"Updated message {m.get('id')} to {len(new_text)} chars.")
+                        m["spoken_text"] = new_text
+                        logger.debug(f"Truncated message {msg_id} to {len(new_text)} chars.")
+                        break
+
+            elif action == "update":
+                msg_id = event["msg_id"]
+                updates = event.get("updates", {})
+                for m in reversed(self._history):
+                    if m.get("id") == msg_id:
+                        m.update(updates)
+                        logger.debug(f"Updated message {msg_id} fields: {list(updates.keys())}")
                         break
                         
             elif action == "clear":
@@ -150,12 +159,25 @@ class HistoryManager:
             "text": actually_spoken_text
         })
 
-    def update_message(self, msg_id: str, text: str) -> None:
-        """Обновить сообщение в реальном времени."""
+    def update_message(self, msg_id: str, text: Optional[str] = None, **kwargs) -> None:
+        """Обновить сообщение в реальном времени.
+
+        Args:
+            msg_id: ID сообщения.
+            text: Новое значение content (опционально).
+            **kwargs: Дополнительные поля сообщения (spoken_text, reasoning_content, finish_reason и т.д.).
+        """
+        updates: Dict[str, Any] = {}
+        if text is not None:
+            updates["content"] = text
+        updates.update(kwargs)
+        if not updates:
+            return
+
         self._event_queue.put({
-            "action": "update", 
-            "msg_id": msg_id, 
-            "text": text
+            "action": "update",
+            "msg_id": msg_id,
+            "updates": updates,
         })
 
     def clear_history(self) -> None:
@@ -164,7 +186,12 @@ class HistoryManager:
 
     # --- Публичные методы чтения (Мгновенный доступ из ОЗУ) ---
 
-    def get_context_window(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_context_window(
+        self,
+        limit: Optional[int] = None,
+        include_reasoning: bool = False,
+        reasoning_max_chars: int = 4000,
+    ) -> List[Dict[str, Any]]:
         """
         Получить окно контекста для отправки в LLM.
         Возвращает чистые сообщения (без внутренних метаданных).
@@ -179,7 +206,20 @@ class HistoryManager:
             # Формируем формат OpenAI
             api_messages = []
             for m in recent:
-                msg = {"role": m["role"], "content": m["content"]}
+                content = m.get("content", "")
+
+                if include_reasoning and m.get("reasoning_content"):
+                    reasoning = str(m.get("reasoning_content", ""))
+                    if reasoning_max_chars > 0 and len(reasoning) > reasoning_max_chars:
+                        reasoning = reasoning[-reasoning_max_chars:]
+
+                    if reasoning:
+                        content = (
+                            f"{content}\n\n"
+                            f"[REASONING_CONTEXT]\n{reasoning}\n[/REASONING_CONTEXT]"
+                        ).strip()
+
+                msg = {"role": m.get("role", "user"), "content": content}
                 if "tool_calls" in m:
                     msg["tool_calls"] = m["tool_calls"]
                 if "tool_call_id" in m:

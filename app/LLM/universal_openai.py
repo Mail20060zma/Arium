@@ -105,6 +105,43 @@ class UniversalOpenAIHandler(BaseLLMHandler):
                     logger.error(f"Ошибка в пуле потоков инструментов: {e}")
         return results
 
+    @staticmethod
+    def _extract_reasoning_text(delta: Any) -> str:
+        """Пытается извлечь reasoning текст из delta в разных форматах провайдеров."""
+        reasoning_text = ""
+
+        for attr_name in ("reasoning", "reasoning_content"):
+            attr_value = getattr(delta, attr_name, None)
+            if isinstance(attr_value, str):
+                reasoning_text += attr_value
+            elif isinstance(attr_value, list):
+                for item in attr_value:
+                    if isinstance(item, str):
+                        reasoning_text += item
+                    elif isinstance(item, dict):
+                        reasoning_text += str(item.get("text", ""))
+                    else:
+                        reasoning_text += str(getattr(item, "text", ""))
+
+        # Фолбэк: некоторые SDK кладут reasoning в model_dump()
+        if not reasoning_text and hasattr(delta, "model_dump"):
+            try:
+                data = delta.model_dump()
+                for key in ("reasoning", "reasoning_content"):
+                    value = data.get(key)
+                    if isinstance(value, str):
+                        reasoning_text += value
+                    elif isinstance(value, list):
+                        for item in value:
+                            if isinstance(item, dict):
+                                reasoning_text += str(item.get("text", ""))
+                            else:
+                                reasoning_text += str(item)
+            except Exception:
+                pass
+
+        return reasoning_text
+
     def send_message_stream(
         self,
         messages: List[Dict[str, Any]],
@@ -134,6 +171,7 @@ class UniversalOpenAIHandler(BaseLLMHandler):
         start_time = 0
         tokens_generated = 0
         full_content = ""
+        full_reasoning = ""
         
         # Инструменты из стрима
         is_tool_call_stream = False
@@ -150,7 +188,11 @@ class UniversalOpenAIHandler(BaseLLMHandler):
                 if cancellation_token and cancellation_token():
                     logger.debug("[LLM Generator] Получен сигнал прерывания. Закрытие Socket/Response...")
                     response.close() # Закрываем TCP-соединение
-                    yield {"content": "", "finish_reason": "cancelled"}
+                    yield {
+                        "type": "status",
+                        "content": "",
+                        "finish_reason": "cancelled"
+                    }
                     return
                 
                 if start_time == 0:
@@ -160,6 +202,16 @@ class UniversalOpenAIHandler(BaseLLMHandler):
                     continue
                     
                 delta = chunk.choices[0].delta
+
+                reasoning_delta = self._extract_reasoning_text(delta)
+                if reasoning_delta:
+                    full_reasoning += reasoning_delta
+                    yield {
+                        "type": "reasoning_delta",
+                        "reasoning_content": reasoning_delta,
+                        "content": "",
+                        "finish_reason": None,
+                    }
                 
                 # Обработка инструмента
                 if delta.tool_calls:
@@ -174,6 +226,8 @@ class UniversalOpenAIHandler(BaseLLMHandler):
                                 "type": "function",
                                 "function": {"name": tc.function.name or "", "arguments": ""}
                             }
+                        if tc.id and not tool_calls_buffer[idx].get("id"):
+                            tool_calls_buffer[idx]["id"] = tc.id
                         if tc.function.name:
                             tool_calls_buffer[idx]["function"]["name"] = tc.function.name
                         if tc.function.arguments:
@@ -186,7 +240,11 @@ class UniversalOpenAIHandler(BaseLLMHandler):
                     tokens_generated += 1
                     
                     # Отдаем текст кусками по мере поступления
-                    yield {"content": txt, "finish_reason": None}
+                    yield {
+                        "type": "content_delta",
+                        "content": txt,
+                        "finish_reason": None,
+                    }
                 
                 # Причина окончания
                 if chunk.choices[0].finish_reason:
@@ -200,7 +258,12 @@ class UniversalOpenAIHandler(BaseLLMHandler):
                     
                     # Если закончилось просто текстом
                     if finish_reason == "stop" and not is_tool_call_stream:
-                        yield {"content": "", "finish_reason": "stop"}
+                        yield {
+                            "type": "status",
+                            "content": "",
+                            "finish_reason": "stop",
+                            "reasoning_content": full_reasoning,
+                        }
                         return
                     
                     # Если закончилось вызовом функции(и) - выходим из цикла стриминга для их обработки
@@ -246,6 +309,16 @@ class UniversalOpenAIHandler(BaseLLMHandler):
                         "name": res["tool_name"],
                         "content": json.dumps(res["result"], ensure_ascii=False)
                     })
+
+                    yield {
+                        "type": "tool_result",
+                        "tool_call_id": res["tool_call_id"],
+                        "tool_name": res["tool_name"],
+                        "result": res["result"],
+                        "success": res.get("success", False),
+                        "content": "",
+                        "finish_reason": None,
+                    }
                 
                 # Запускаем рекурсию для получения финального ответа
                 yield from self.send_message_stream(
@@ -257,7 +330,11 @@ class UniversalOpenAIHandler(BaseLLMHandler):
 
         except Exception as e:
             logger.error(f"Ошибка стриминга API: {e}", exc_info=True)
-            yield {"content": f"\n[Ошибка ИИ: {str(e)}]", "finish_reason": "error"}
+            yield {
+                "type": "status",
+                "content": f"\n[Ошибка ИИ: {str(e)}]",
+                "finish_reason": "error"
+            }
 
     def ping_fast_interrupt(self, context_text: str) -> bool:
         """

@@ -1,31 +1,60 @@
 {
   "model": {
-    "qwen3.5-4b": {
-      "model": "qwen3.5-4b",
+    "qwen3_5_08b": {
+      "model": "lmstudio-community/qwen3.5-0.8b",
       "api_key": "",
       "provider": "ollama",
-      "model_id": "qwen3.5-4b",
-      "model_name": "Qwen2.5-Coder 7B",
-      "base_url": "http://127.0.0.1:1234"
+      "model_id": "lmstudio-community/qwen3.5-0.8b",
+      "model_name": "lmstudio-community/qwen3.5-0.8b",
+      "base_url": "http://127.0.0.1:1234/v1"
     },
-    "meta-llama/llama-4-scout-17b-16e-instruct":{
-      "model": "meta-llama/llama-4-scout-17b-16e-instruct",
-      "api_key": "",
+    "llama_4_scout": {
+      "model": "llama_4_scout",
+      "api_key": "g4f_u_mo43yk_b96ab15d1361ae6b3ef508ab7ea2f53948b176e41489ef3b_a54e4b37",
       "provider": "g4f",
       "model_id": "meta-llama/llama-4-scout-17b-16e-instruct",
       "model_name": "meta-llama/llama-4-scout-17b-16e-instruct",
       "base_url": "https://g4f.space/api/groq/model"
     },
-    "openrouter/elephant-alpha":{
+    "openrouter/elephant-alpha": {
       "model": "openrouter/elephant-alpha",
-      "api_key": "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",
-      "provider": "g4f",
+      "api_key": "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",
+      "provider": "openrouter",
       "model_id": "openrouter/elephant-alpha",
       "model_name": "openrouter/elephant-alpha",
       "base_url": "https://openrouter.ai/api/v1"
+    },
+    "srv_mkoloq41e34074b6133e:gpt-5-mini-2025-08-07": {
+      "model": "srv_mkoloq41e34074b6133e:gpt-5-mini-2025-08-07",
+      "api_key": "g4f_u_mo43yk_b96ab15d1361ae6b3ef508ab7ea2f53948b176e41489ef3b_a54e4b37",
+      "provider": "g4f",
+      "model_id": "gpt-5-mini-2025-08-07",
+      "model_name": "srv_mkoloq41e34074b6133e:gpt-5-mini-2025-08-07",
+      "base_url": "https://g4f.space/api/custom/srv_mkoloq41e34074b6133e"
     }
-  },  
-  "current_model": "qwen3.5-4b",
+  },
+  "llm": {
+    "tool_only_voice_output": true,
+    "enabled_tools": [
+      "text_to_audio"
+    ]
+  },
+  "memory": {
+    "context_window_size": 25,
+    "history_file": "chat_history.json",
+    "include_reasoning_in_context": true,
+    "reasoning_max_chars": 4000
+  },
+  "controls": {
+    "ptt_mode": "push_to_talk",
+    "ptt_keys": "alt",
+    "ptt_pre_roll_seconds": 1.0,
+    "ptt_post_roll_seconds": 1.0,
+    "ptt_chunk_seconds": 0.1,
+    "ptt_ring_buffer_seconds": 6.0,
+    "ptt_sample_rate": 16000
+  },
+  "current_model": "qwen3_5_08b",
   "stt_provider": "whisper",
   "stt_model": "small",
   "tts_backend": "silero",
@@ -33,9 +62,5 @@
   "tts_speaker": "kseniya",
   "tts_xtts_model": "v2.0.2",
   "tts_xtts_speaker": "",
-  "tts_streaming": true,
-  "controls": {
-    "ptt_mode": true,
-    "ptt_keys": "alt"
-  }
+  "tts_streaming": true
 }

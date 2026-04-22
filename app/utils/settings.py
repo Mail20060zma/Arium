@@ -8,29 +8,6 @@ from typing import Any, Optional, Dict, Union
 class Settings:
     """
     Менеджер настроек приложения с хранением в JSON-файле.
-    
-    Структура настроек:
-    {
-    "model": {
-        "meta-llama/llama-4-scout-17b-16e-instruct":{
-            "model": "meta-llama/llama-4-scout-17b-16e-instruct",
-            "api_key": "",
-            "provider": "g4f",
-            "model_id": "meta-llama/llama-4-scout-17b-16e-instruct",
-            "model_name": "meta-llama/llama-4-scout-17b-16e-instruct",
-            "base_url": "https://g4f.space/api/groq/model"
-        }    
-    },
-    "current_model": "meta-llama/llama-4-scout-17b-16e-instruct",
-    "stt_provider": "whisper",
-    "stt_model": "small",
-    "tts_backend": "silero",
-    "tts_silero_model": "v5_ru",
-    "tts_speaker": "kseniya",
-    "tts_xtts_model": "v2.0.2",
-    "tts_xtts_speaker": "",
-    "tts_streaming": True
-    }
     """
     
     def __init__(self, filepath: str = 'settings.json', create_if_missing: bool = True):
@@ -62,22 +39,34 @@ class Settings:
             },
             "current_model": "qwen2.5-coder-7b",
             "stt_provider": "whisper",
-            "stt_model": "small",
+            "stt_model": "tiny",
             "tts_backend": "silero",
             "tts_silero_model": "v5_ru",
             "tts_speaker": "kseniya",
             "tts_xtts_model": "v2.0.2",
             "tts_xtts_speaker": "",
             "tts_streaming": True,
+
+            "llm": {
+                "tool_only_voice_output": True,
+                "enabled_tools": ["text_to_audio"]
+            },
             
             # === AI Engine v2 ===
             "memory": {
                 "context_window_size": 25,
-                "history_file": "chat_history.json"
+                "history_file": "chat_history.json",
+                "include_reasoning_in_context": True,
+                "reasoning_max_chars": 4000
             },
             "controls": {
                 "ptt_mode": "push_to_talk",
-                "ptt_keys": "alt"
+                "ptt_keys": "alt",
+                "ptt_pre_roll_seconds": 1.0,
+                "ptt_post_roll_seconds": 1.0,
+                "ptt_chunk_seconds": 0.1,
+                "ptt_ring_buffer_seconds": 6.0,
+                "ptt_sample_rate": 16000
             }
         }
     
