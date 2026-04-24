@@ -1,0 +1,6 @@
+{
+  "response_mode": "Голосом",
+  "launch_shortcut": "Ctrl+Shift+Space",
+  "theme": "Тёмная",
+  "overlay_settings_button": "Отключена"
+}
