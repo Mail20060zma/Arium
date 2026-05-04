@@ -44,6 +44,8 @@ class AriumEngine:
         self.current_reasoning_content = ""
         self.current_turn_tool_results = []
         self._turn_state_lock = threading.Lock()
+        self._ai_request_queue = queue.Queue()
+        self._ai_worker_thread: Optional[threading.Thread] = None
         
         self._init_components()
 
@@ -130,10 +132,21 @@ class AriumEngine:
         self.ptt_sample_rate = max(8000, self.ptt_sample_rate)
 
         self.keyboard_module = None
+        self._ptt_key_variants = []
         if self.ptt_mode:
             try:
                 import keyboard
                 self.keyboard_module = keyboard
+
+                ptt_keys_normalized = str(self.ptt_keys).strip().lower()
+                if ptt_keys_normalized in {"right alt", "ralt", "altgr", "alt gr"}:
+                    # На Windows/keyboard правый Alt может называться по-разному.
+                    self._ptt_key_variants = ["right alt", "alt gr", "altgr"]
+                elif "|" in str(self.ptt_keys):
+                    self._ptt_key_variants = [part.strip() for part in str(self.ptt_keys).split("|") if part.strip()]
+                else:
+                    self._ptt_key_variants = [str(self.ptt_keys)]
+
                 logger.info(
                     f"🎤 Push-To-Talk включен. Клавиша: {self.ptt_keys}. "
                     f"Окно захвата: -{self.ptt_pre_roll_seconds:.1f}с/+{self.ptt_post_roll_seconds:.1f}с"
@@ -158,6 +171,31 @@ class AriumEngine:
             if self.cancellation_token or self.abort_playback_event.is_set():
                 return
             time.sleep(0.02)
+
+    def _interrupt_ai_output(self, source: str = "user_interrupt") -> bool:
+        """Немедленно прерывает текущую озвучку и очищает очередь TTS."""
+        has_pending_output = self.is_speaking or (not self.tts_sentence_queue.empty())
+        if not has_pending_output:
+            return False
+
+        self.cancellation_token = True
+        self.abort_playback_event.set()
+        with self.tts_sentence_queue.mutex:
+            self.tts_sentence_queue.queue.clear()
+
+        # Фиксируем только реально озвученный текст, если assistant-сообщение уже создано.
+        if self.last_ai_message_id:
+            spoken = self.current_ai_text_spoken.strip()
+            self.history_manager.update_message(
+                self.last_ai_message_id,
+                text=spoken,
+                spoken_text=spoken,
+                interrupted=True,
+                finish_reason="cancelled",
+                interrupt_source=source,
+            )
+
+        return True
 
     def _tool_text_to_audio(self, text: str, speaker: str = "kseniya") -> dict:
         """Инструмент озвучки для LLM: ставит текст в очередь TTS.
@@ -269,25 +307,13 @@ class AriumEngine:
         logger.info(f"🗣️ Вы сказали: {text}")
 
         # --- SOFT INTERRUPT LOGIC ---
-        if self.is_speaking:
+        if self.is_speaking or not self.tts_sentence_queue.empty():
             logger.debug("Обнаружена речь во время работы ИИ. Анализ перебивания...")
             is_interrupt = self.llm.ping_fast_interrupt(text)
 
             if is_interrupt:
                 logger.info("🛑 Зафиксировано перебивание (Soft Interrupt)!")
-                self.cancellation_token = True       # Останавливаем генерацию LLM
-                self.abort_playback_event.set()      # Останавливаем динамик
-
-                # Фиксируем только реально озвученный текст, если assistant-сообщение уже создано.
-                if self.last_ai_message_id:
-                    spoken = self.current_ai_text_spoken.strip()
-                    self.history_manager.update_message(
-                        self.last_ai_message_id,
-                        text=spoken,
-                        spoken_text=spoken,
-                        interrupted=True,
-                        finish_reason="cancelled",
-                    )
+                self._interrupt_ai_output(source="voice_interrupt")
             else:
                 logger.info("💨 Шум / Угуканье (игнорируем)")
                 return
@@ -366,7 +392,10 @@ class AriumEngine:
             ):
                 while self.running:
                     try:
-                        ptt_pressed = self.keyboard_module.is_pressed(self.ptt_keys)
+                        ptt_pressed = any(
+                            self.keyboard_module.is_pressed(key_variant)
+                            for key_variant in self._ptt_key_variants
+                        )
                     except Exception:
                         logger.debug("[PTT] Ошибка чтения состояния горячей клавиши", exc_info=True)
                         ptt_pressed = False
@@ -381,6 +410,10 @@ class AriumEngine:
 
                     with state_lock:
                         if ptt_pressed and capture_state == 'idle':
+                            if self.is_speaking or not self.tts_sentence_queue.empty():
+                                logger.info("🛑 PTT нажат: прерываю текущую озвучку и очищаю очередь")
+                                self._interrupt_ai_output(source="ptt_key_down")
+
                             capture_state = 'recording'
                             active_chunks = list(ring_buffer)[-pre_roll_count:]
                             post_deadline = 0.0
@@ -433,6 +466,14 @@ class AriumEngine:
         """Запуск главных потоков."""
         self.running = True
         self.history_manager.start_worker()
+
+        logger.debug("Запуск потока AI_Worker_Thread...")
+        self._ai_worker_thread = threading.Thread(
+            target=self._ai_worker,
+            daemon=True,
+            name="AI_Worker_Thread",
+        )
+        self._ai_worker_thread.start()
         
         logger.debug("Запуск потока STT_Thread...")
         threading.Thread(target=self._stt_worker, daemon=True, name="STT_Thread").start()
@@ -453,10 +494,32 @@ class AriumEngine:
         self.running = False
         self.cancellation_token = True
         self.abort_playback_event.set()
+        self._ai_request_queue.put(None)
+        if self._ai_worker_thread:
+            self._ai_worker_thread.join(timeout=2.0)
         self.history_manager.stop_worker()
         self.dispatcher.cancel()
 
     # ================= WORKERS =================
+
+    def _ai_worker(self):
+        """Последовательный воркер генерации ответов ИИ (без гонок между потоками)."""
+        while self.running:
+            try:
+                request_item = self._ai_request_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            if request_item is None:
+                self._ai_request_queue.task_done()
+                break
+
+            try:
+                self._generate_ai_response()
+            except Exception as exc:
+                logger.error(f"[AI Worker] Ошибка генерации ответа: {exc}", exc_info=True)
+            finally:
+                self._ai_request_queue.task_done()
 
     def _stt_worker(self):
         """Поток прослушивания микрофона."""
@@ -546,12 +609,21 @@ class AriumEngine:
     def _on_user_speech_batched(self, events: List[dict]):
         """Вызывается EventDispatcher после окончания буферизации/Debouncing речи."""
         combined_text = " ".join([e["data"] for e in events if e["data"]])
+        combined_text = combined_text.strip()
+        if not combined_text:
+            return
         
         # Добавляем наш запрос в базу
         self.history_manager.append_message("user", combined_text)
-        
-        # Сброс сигналов прерывания
-        logger.debug("[Dispatcher] Сигналы прерывания сброшены, запуск LLM-генерации...")
+        self.history_manager.wait_until_idle(timeout=1.0)
+
+        logger.debug("[Dispatcher] Сообщение пользователя поставлено в очередь AI-воркера")
+        self._ai_request_queue.put({"text": combined_text, "timestamp": time.time()})
+
+    def _generate_ai_response(self):
+        """Работа с Universal LLM и стримингом (strict tool-first voice)."""
+        # Подготовка состояния хода (делаем только в одном AI-воркере, поэтому гонок нет).
+        logger.debug("[AI] Старт новой генерации, сброс turn-state")
         self.cancellation_token = False
         self.abort_playback_event.clear()
         self.current_ai_text_spoken = ""
@@ -559,12 +631,10 @@ class AriumEngine:
         self.last_ai_message_id = None
         with self._turn_state_lock:
             self.current_turn_tool_results = []
-        
-        # Запускаем в отдельном потоке, чтобы не блокировать диспетчер
-        threading.Thread(target=self._generate_ai_response, daemon=True, name="AI_Response_Thread").start()
 
-    def _generate_ai_response(self):
-        """Работа с Universal LLM и стримингом (strict tool-first voice)."""
+        # Гарантируем, что все события истории (включая user) уже применены.
+        self.history_manager.wait_until_idle(timeout=2.0)
+
         # Подготовка контекста
         context_limit = self.settings.get('memory.context_window_size', 25)
         include_reasoning = bool(self.settings.get('memory.include_reasoning_in_context', True))
@@ -580,21 +650,56 @@ class AriumEngine:
             messages.append({"role": "system", "content": self.system_prompt})
         messages.extend(raw_history)
 
+        # Когда доступен только text_to_audio, многие небольшие модели плохо справляются
+        # с forced function-calling и склонны к шаблонным ответам. В этом режиме получаем
+        # обычный текстовый ответ и уже локально отправляем его в text_to_audio.
+        single_tts_tool_mode = self.tool_only_voice_output and set(self.enabled_tools) == {"text_to_audio"}
+        if single_tts_tool_mode:
+            messages.insert(
+                1,
+                {
+                    "role": "system",
+                    "content": (
+                        "Технический режим: не вызывай инструменты. "
+                        "Сформируй только финальный краткий ответ пользователю обычным текстом."
+                    ),
+                },
+            )
+
         raw_assistant_text = ""
         reasoning_buffer = ""
         finish_reason = None
         tool_events_count = 0
+        had_error = False
+        error_details = ""
+        error_public_text = "Извините, сейчас возникла проблема с подключением к ИИ. Попробуйте еще раз."
         
         # Получаем стрим от LLM
         logger.debug(f"[LLM] Вызов стрим-ответчика ({self.settings.get_model_id_for_model()})")
+        tool_choice = None
+        tools_definitions = self.tools_definitions
+        if single_tts_tool_mode:
+            tools_definitions = None
+        elif self.tools_definitions:
+            tool_choice = "required" if self.tool_only_voice_output else "auto"
+
         stream = self.llm.send_message_stream(
             messages=messages,
-            tools_definitions=self.tools_definitions,
+            tools_definitions=tools_definitions,
+            tool_choice=tool_choice,
             cancellation_token=self._cancellation_callback
         )
         
         for chunk in stream:
             chunk_type = chunk.get("type")
+
+            if chunk_type == "status" and chunk.get("finish_reason") == "error":
+                had_error = True
+                finish_reason = "error"
+                details = chunk.get("error") or chunk.get("content") or ""
+                if details:
+                    error_details = str(details)
+                continue
 
             if chunk_type == "reasoning_delta":
                 reasoning_delta = chunk.get("reasoning_content", "")
@@ -623,6 +728,20 @@ class AriumEngine:
                 tool_events_count += 1
                 continue
 
+            if chunk_type == "assistant_tool_calls":
+                if single_tts_tool_mode:
+                    # В single_tts_tool_mode не ожидаем tool_calls от модели.
+                    continue
+
+                tool_calls = chunk.get("tool_calls")
+                if isinstance(tool_calls, list) and tool_calls:
+                    self.history_manager.append_message(
+                        "assistant",
+                        None,
+                        tool_calls=tool_calls,
+                    )
+                continue
+
             if self.cancellation_token:
                 logger.info("[LLM] Полная остановка стрима из-за внешнего флага CancellationToken.")
                 break
@@ -639,6 +758,65 @@ class AriumEngine:
             if chunk.get("finish_reason"):
                 finish_reason = chunk.get("finish_reason")
 
+        if had_error and tool_events_count == 0:
+            if error_details:
+                logger.warning(f"[LLM] Ошибка генерации: {error_details}")
+
+            local_tool_call_id = f"local_tts_error_{int(time.time() * 1000)}"
+            local_tool_call = {
+                "id": local_tool_call_id,
+                "type": "function",
+                "function": {
+                    "name": "text_to_audio",
+                    "arguments": json.dumps({"text": error_public_text}, ensure_ascii=False),
+                },
+            }
+
+            # Каноничная пара assistant(tool_calls) -> tool(tool_call_id)
+            self.history_manager.append_message(
+                "assistant",
+                None,
+                tool_calls=[local_tool_call],
+            )
+
+            tool_result = self._tool_text_to_audio(error_public_text)
+            self.history_manager.append_message(
+                "tool",
+                json.dumps(tool_result, ensure_ascii=False),
+                tool_call_id=local_tool_call_id,
+                name="text_to_audio",
+            )
+            tool_events_count += 1
+            raw_assistant_text = ""
+
+        if single_tts_tool_mode and raw_assistant_text.strip() and tool_events_count == 0:
+            local_text = raw_assistant_text.strip()
+            local_tool_call_id = f"local_tts_{int(time.time() * 1000)}"
+            local_tool_call = {
+                "id": local_tool_call_id,
+                "type": "function",
+                "function": {
+                    "name": "text_to_audio",
+                    "arguments": json.dumps({"text": local_text}, ensure_ascii=False),
+                },
+            }
+
+            # Каноничная пара assistant(tool_calls) -> tool(tool_call_id)
+            self.history_manager.append_message(
+                "assistant",
+                None,
+                tool_calls=[local_tool_call],
+            )
+
+            tool_result = self._tool_text_to_audio(local_text)
+            self.history_manager.append_message(
+                "tool",
+                json.dumps(tool_result, ensure_ascii=False),
+                tool_call_id=local_tool_call_id,
+                name="text_to_audio",
+            )
+            tool_events_count += 1
+
         # В strict tool-only режиме итог ассистента формируется только из реально озвученного текста.
         self._wait_for_tts_completion(timeout=30.0)
         spoken_text = self.current_ai_text_spoken.strip()
@@ -646,6 +824,10 @@ class AriumEngine:
 
         if self.tool_only_voice_output:
             assistant_content = spoken_text
+            if not assistant_content and raw_assistant_text.strip():
+                # Fallback на случай, если модель нарушила контракт и не вызвала text_to_audio.
+                logger.warning("[LLM] Нет озвученного текста в strict-режиме, сохраняем raw assistant text как fallback")
+                assistant_content = raw_assistant_text.strip()
         else:
             assistant_content = spoken_text or raw_assistant_text.strip()
 
@@ -655,15 +837,15 @@ class AriumEngine:
         with self._turn_state_lock:
             tool_snapshot = list(self.current_turn_tool_results)
 
-        # Сохраняем assistant запись только если есть смысловой контент/метаданные хода.
-        if assistant_content or reasoning_buffer or tool_events_count > 0:
-            self.last_ai_message_id = self.history_manager.append_message(
-                "assistant",
-                assistant_content,
-                spoken_text=spoken_text,
-                reasoning_content=reasoning_buffer,
-                finish_reason=finish_reason,
-                model=self.settings.get_model_id_for_model(),
-                tool_results=tool_snapshot,
-                interrupted=bool(self.cancellation_token or self.abort_playback_event.is_set()),
-            )
+        # Всегда фиксируем assistant-ход, даже если ответ пустой/прерванный.
+        self.last_ai_message_id = self.history_manager.append_message(
+            "assistant",
+            assistant_content,
+            spoken_text=spoken_text,
+            reasoning_content=reasoning_buffer,
+            finish_reason=finish_reason,
+            model=self.settings.get_model_id_for_model(),
+            tool_results=tool_snapshot,
+            interrupted=bool(self.cancellation_token or self.abort_playback_event.is_set()),
+            tool_events_count=tool_events_count,
+        )

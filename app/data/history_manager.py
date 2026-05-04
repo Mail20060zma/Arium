@@ -5,6 +5,7 @@ import queue
 import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -73,23 +74,24 @@ class HistoryManager:
 
     def stop_worker(self) -> None:
         """Остановка воркера."""
-        self._is_running = False
         if self._worker_thread:
             # Send a poison pill
             self._event_queue.put({"action": "stop"})
             self._worker_thread.join(timeout=2.0)
+            self._is_running = False
             self._flush_to_disk()
 
     def _worker_loop(self) -> None:
         """Основной цикл (Event Loop) фонового потока."""
         needs_flush = False
-        while self._is_running:
+        while True:
             try:
                 # Get events with a small timeout to allow batching flushes
                 event = self._event_queue.get(timeout=1.0)
                 
                 if event.get("action") == "stop":
                     self._flush_to_disk() # Явный сброс перед полной остановкой
+                    self._event_queue.task_done()
                     break
                 
                 self._process_event(event)
@@ -111,7 +113,7 @@ class HistoryManager:
             if action == "add":
                 msg = event["message"]
                 if "id" not in msg:
-                    msg["id"] = f"msg_{int(time.time() * 1000)}"
+                    msg["id"] = f"msg_{uuid4().hex}"
                 self._history.append(msg)
                 
             elif action == "truncate":
@@ -138,9 +140,9 @@ class HistoryManager:
 
     # --- Публичные неблокирующие методы (Отправка событий) ---
 
-    def append_message(self, role: str, content: str, msg_id: Optional[str] = None, **kwargs) -> str:
+    def append_message(self, role: str, content: Optional[str], msg_id: Optional[str] = None, **kwargs) -> str:
         """Добавить сообщение (не блокирует вызов)."""
-        mid = msg_id or f"msg_{int(time.time() * 1000)}"
+        mid = msg_id or f"msg_{uuid4().hex}"
         msg = {
             "id": mid,
             "role": role,
@@ -184,6 +186,15 @@ class HistoryManager:
         """Очистить историю."""
         self._event_queue.put({"action": "clear"})
 
+    def wait_until_idle(self, timeout: float = 2.0) -> bool:
+        """Дождаться обработки всех queued-событий истории."""
+        deadline = time.monotonic() + max(0.0, timeout)
+        while time.monotonic() < deadline:
+            if self._event_queue.unfinished_tasks == 0:
+                return True
+            time.sleep(0.01)
+        return self._event_queue.unfinished_tasks == 0
+
     # --- Публичные методы чтения (Мгновенный доступ из ОЗУ) ---
 
     def get_context_window(
@@ -203,31 +214,75 @@ class HistoryManager:
             # Берем последние limit сообщений
             recent = self._history[-limit:] if limit > 0 else self._history
             
-            # Формируем формат OpenAI
+            # Формируем каноничный формат Chat Completions.
+            # В контекст отправляем только официальные поля role/content/tool_calls/tool_call_id/name.
             api_messages = []
+            tool_messages_in_turn = 0
+            max_tool_messages_per_turn = 4
             for m in recent:
+                role = str(m.get("role", "user"))
                 content = m.get("content", "")
 
-                if include_reasoning and m.get("reasoning_content"):
-                    reasoning = str(m.get("reasoning_content", ""))
-                    if reasoning_max_chars > 0 and len(reasoning) > reasoning_max_chars:
-                        reasoning = reasoning[-reasoning_max_chars:]
+                if role in {"user", "system", "developer"}:
+                    tool_messages_in_turn = 0
 
-                    if reasoning:
-                        content = (
-                            f"{content}\n\n"
-                            f"[REASONING_CONTEXT]\n{reasoning}\n[/REASONING_CONTEXT]"
-                        ).strip()
+                if role == "assistant":
+                    if isinstance(m.get("tool_calls"), list) and m.get("tool_calls"):
+                        if tool_messages_in_turn >= max_tool_messages_per_turn:
+                            continue
+                        tool_messages_in_turn += 1
 
-                msg = {"role": m.get("role", "user"), "content": content}
-                if "tool_calls" in m:
-                    msg["tool_calls"] = m["tool_calls"]
-                if "tool_call_id" in m:
-                    msg["tool_call_id"] = m["tool_call_id"]
-                    msg["name"] = m.get("name", "")
-                
-                api_messages.append(msg)
-                
+                    msg = {"role": "assistant"}
+                    tool_calls = m.get("tool_calls")
+                    if isinstance(tool_calls, list) and tool_calls:
+                        # Tool-calls озвучки не нужны в будущем контексте и могут вызывать шум/циклы.
+                        names = []
+                        for tc in tool_calls:
+                            if not isinstance(tc, dict):
+                                continue
+                            fn = tc.get("function")
+                            if isinstance(fn, dict):
+                                names.append(str(fn.get("name", "")))
+                        if names and all(name == "text_to_audio" for name in names):
+                            continue
+
+                        msg["tool_calls"] = tool_calls
+                        msg["content"] = content if content is not None else None
+                    else:
+                        msg["content"] = "" if content is None else str(content)
+                    api_messages.append(msg)
+                    continue
+
+                if role == "tool":
+                    if tool_messages_in_turn >= max_tool_messages_per_turn:
+                        continue
+
+                    tool_call_id = m.get("tool_call_id")
+                    if not tool_call_id:
+                        continue
+
+                    if str(m.get("name", "")) == "text_to_audio":
+                        continue
+
+                    tool_messages_in_turn += 1
+
+                    msg = {
+                        "role": "tool",
+                        "tool_call_id": str(tool_call_id),
+                        "content": "" if content is None else str(content),
+                    }
+                    if "name" in m and m.get("name"):
+                        msg["name"] = str(m.get("name"))
+                    api_messages.append(msg)
+                    continue
+
+                if role in {"user", "system", "developer"}:
+                    msg = {
+                        "role": role,
+                        "content": "" if content is None else str(content),
+                    }
+                    api_messages.append(msg)
+
             return api_messages
 
     def get_last_message_id(self, role: str = "assistant") -> Optional[str]:

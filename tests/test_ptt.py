@@ -23,7 +23,7 @@ SAMPLE_RATE = 16000
 CHANNELS = 1
 CHUNK_SECONDS = 0.1
 PRE_ROLL_SECONDS = 1.0
-POST_ROLL_SECONDS = 1.0
+POST_ROLL_SECONDS = 0.3
 RING_BUFFER_SECONDS = 6.0
 
 
@@ -34,7 +34,7 @@ def load_runtime_config() -> tuple[str, str | None, str]:
 
     backend = settings.get("stt_provider", "whisper")
     model_name = settings.get("stt_model", "small")
-    ptt_key = settings.get("controls.ptt_keys", "alt")
+    ptt_key = settings.get("controls.ptt_keys", "right alt")
 
     if backend == "google":
         model_name = None

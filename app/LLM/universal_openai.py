@@ -146,6 +146,7 @@ class UniversalOpenAIHandler(BaseLLMHandler):
         self,
         messages: List[Dict[str, Any]],
         tools_definitions: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
         cancellation_token: Optional[Callable[[], bool]] = None,
         max_depth: int = 5
     ) -> Generator[Dict[str, Any], None, None]:
@@ -167,6 +168,8 @@ class UniversalOpenAIHandler(BaseLLMHandler):
         }
         if tools_definitions:
             request_kwargs["tools"] = tools_definitions
+        if tool_choice is not None:
+            request_kwargs["tool_choice"] = tool_choice
 
         start_time = 0
         tokens_generated = 0
@@ -273,12 +276,20 @@ class UniversalOpenAIHandler(BaseLLMHandler):
             # Если мы оказались тут, значит либо сработал timeout/error, либо нужно вызвать инструмент.
             if is_tool_call_stream:
                 logger.info(f"Обнаружен вызов {len(tool_calls_buffer)} инструментов в потоке.")
+
+                tool_calls_payload = list(tool_calls_buffer.values())
+                yield {
+                    "type": "assistant_tool_calls",
+                    "tool_calls": tool_calls_payload,
+                    "content": "",
+                    "finish_reason": None,
+                }
                 
                 # Конвертируем буфер в формат совместимый с API
                 assistant_tool_message = {
                     "role": "assistant",
                     "content": None,
-                    "tool_calls": list(tool_calls_buffer.values())
+                    "tool_calls": tool_calls_payload
                 }
                 messages.append(assistant_tool_message)
                 
@@ -319,11 +330,24 @@ class UniversalOpenAIHandler(BaseLLMHandler):
                         "content": "",
                         "finish_reason": None,
                     }
+
+                # Терминальный кейс: если вызваны только озвучивающие инструменты,
+                # считаем ход завершенным и НЕ уходим в рекурсивный повтор.
+                # Это предотвращает циклы tool_calls -> tool_calls -> ...
+                tool_names = {str(res.get("tool_name", "")) for res in tool_results}
+                if tool_names and tool_names == {"text_to_audio"}:
+                    yield {
+                        "type": "status",
+                        "content": "",
+                        "finish_reason": "stop",
+                    }
+                    return
                 
                 # Запускаем рекурсию для получения финального ответа
                 yield from self.send_message_stream(
                     messages=messages,
                     tools_definitions=tools_definitions,
+                    tool_choice=tool_choice,
                     cancellation_token=cancellation_token,
                     max_depth=max_depth - 1
                 )
@@ -332,8 +356,9 @@ class UniversalOpenAIHandler(BaseLLMHandler):
             logger.error(f"Ошибка стриминга API: {e}", exc_info=True)
             yield {
                 "type": "status",
-                "content": f"\n[Ошибка ИИ: {str(e)}]",
-                "finish_reason": "error"
+                "content": "",
+                "finish_reason": "error",
+                "error": str(e),
             }
 
     def ping_fast_interrupt(self, context_text: str) -> bool:

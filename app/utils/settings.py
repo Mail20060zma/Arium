@@ -61,7 +61,7 @@ class Settings:
             },
             "controls": {
                 "ptt_mode": "push_to_talk",
-                "ptt_keys": "alt",
+                "ptt_keys": "right alt",
                 "ptt_pre_roll_seconds": 1.0,
                 "ptt_post_roll_seconds": 1.0,
                 "ptt_chunk_seconds": 0.1,

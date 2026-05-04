@@ -16,21 +16,21 @@
       "model_name": "meta-llama/llama-4-scout-17b-16e-instruct",
       "base_url": "https://g4f.space/api/groq/model"
     },
-    "openrouter/elephant-alpha": {
-      "model": "openrouter/elephant-alpha",
-      "api_key": "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",
-      "provider": "openrouter",
-      "model_id": "openrouter/elephant-alpha",
-      "model_name": "openrouter/elephant-alpha",
-      "base_url": "https://openrouter.ai/api/v1"
-    },
-    "srv_mkoloq41e34074b6133e:gpt-5-mini-2025-08-07": {
-      "model": "srv_mkoloq41e34074b6133e:gpt-5-mini-2025-08-07",
+    "gpt_5_mini": {
+      "model": "gpt_5_mini",
       "api_key": "g4f_u_mo43yk_b96ab15d1361ae6b3ef508ab7ea2f53948b176e41489ef3b_a54e4b37",
       "provider": "g4f",
-      "model_id": "gpt-5-mini-2025-08-07",
-      "model_name": "srv_mkoloq41e34074b6133e:gpt-5-mini-2025-08-07",
+      "model_id": "srv_mkoloq41e34074b6133e:gpt-5-mini-2025-08-07",
+      "model_name": "gpt_5_mini",
       "base_url": "https://g4f.space/api/custom/srv_mkoloq41e34074b6133e"
+    },
+    "claude_opus_4_6_thinking": {
+      "model": "claude_opus_4_6_thinking",
+      "api_key": "g4f_u_mo43yk_b96ab15d1361ae6b3ef508ab7ea2f53948b176e41489ef3b_a54e4b37",
+      "provider": "g4f",
+      "model_id": "srv_mkom688d57c76d8a3542:meta-llama/llama-4-scout-17b-16e-instruct",
+      "model_name": "claude-opus-4-6-thinking",
+      "base_url": "https://g4f.space/api/custom/srv_mkom688d57c76d8a3542"
     }
   },
   "llm": {
@@ -47,14 +47,14 @@
   },
   "controls": {
     "ptt_mode": "push_to_talk",
-    "ptt_keys": "alt",
+    "ptt_keys": "right alt",
     "ptt_pre_roll_seconds": 1.0,
     "ptt_post_roll_seconds": 1.0,
     "ptt_chunk_seconds": 0.1,
     "ptt_ring_buffer_seconds": 6.0,
     "ptt_sample_rate": 16000
   },
-  "current_model": "qwen3_5_08b",
+  "current_model": "gpt_5_mini",
   "stt_provider": "whisper",
   "stt_model": "small",
   "tts_backend": "silero",
