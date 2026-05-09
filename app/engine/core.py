@@ -43,6 +43,7 @@ class AriumEngine:
         self.current_ai_text_spoken = ""
         self.current_reasoning_content = ""
         self.current_turn_tool_results = []
+        self._turn_tts_tool_results: List[dict] = []
         self._turn_state_lock = threading.Lock()
         self._ai_request_queue = queue.Queue()
         self._ai_worker_thread: Optional[threading.Thread] = None
@@ -81,6 +82,8 @@ class AriumEngine:
 
         self.tool_only_voice_output = bool(self.settings.get('llm.tool_only_voice_output', True))
         self.system_prompt = SYSTEM_PROMPT.strip()
+        user_prompt_raw = self.settings.get('llm.user_system_prompt', '')
+        self.user_system_prompt = (str(user_prompt_raw).strip() if user_prompt_raw is not None else "")
         self.tools_definitions = build_tools_use(self.enabled_tools)
         
         logger.info("🔧 Инициализация TTS...")
@@ -91,10 +94,16 @@ class AriumEngine:
             logger.warning("TTS движок не поддерживает `stream_audio`. Чанкинг может не работать должным образом.")
         
         logger.info("🔧 Инициализация STT...")
-        self.stt = create_stt(
-            self.settings.get('stt_provider', 'whisper'),
-            self.settings.get('stt_model', 'small')
-        )
+        stt_provider = self.settings.get('stt_provider', 'whisper')
+        stt_model = self.settings.get('stt_model', 'small')
+        if stt_provider == 'google':
+            if stt_model is not None:
+                normalized = str(stt_model).strip().lower()
+                if normalized not in {"", "none", "null"}:
+                    self.settings.set('stt_model', None)
+            stt_model = None
+
+        self.stt = create_stt(stt_provider, stt_model)
 
         logger.info("🔧 Инициализация Универсального LLM...")
         tool_handlers = get_tool_handlers(
@@ -295,6 +304,8 @@ class AriumEngine:
                 ).strip()
             except sr.UnknownValueError:
                 return ''
+            except sr.RequestError:
+                return ''
 
         raise ValueError(f"Неизвестный STT провайдер для buffered PTT: {stt_provider}")
 
@@ -403,6 +414,12 @@ class AriumEngine:
                     if ptt_pressed != last_ptt_state:
                         state_text = "зажата" if ptt_pressed else "отпущена"
                         logger.debug(f"[PTT] Клавиша '{self.ptt_keys}' {state_text}.")
+
+                        if ptt_pressed and not last_ptt_state:
+                            if self.is_speaking or not self.tts_sentence_queue.empty():
+                                logger.info("🛑 PTT нажат: прерываю текущую озвучку и очищаю очередь")
+                                self._interrupt_ai_output(source="ptt_key_down")
+
                         last_ptt_state = ptt_pressed
 
                     now = time.monotonic()
@@ -410,10 +427,6 @@ class AriumEngine:
 
                     with state_lock:
                         if ptt_pressed and capture_state == 'idle':
-                            if self.is_speaking or not self.tts_sentence_queue.empty():
-                                logger.info("🛑 PTT нажат: прерываю текущую озвучку и очищаю очередь")
-                                self._interrupt_ai_output(source="ptt_key_down")
-
                             capture_state = 'recording'
                             active_chunks = list(ring_buffer)[-pre_roll_count:]
                             post_deadline = 0.0
@@ -631,6 +644,7 @@ class AriumEngine:
         self.last_ai_message_id = None
         with self._turn_state_lock:
             self.current_turn_tool_results = []
+            self._turn_tts_tool_results = []
 
         # Гарантируем, что все события истории (включая user) уже применены.
         self.history_manager.wait_until_idle(timeout=2.0)
@@ -648,6 +662,15 @@ class AriumEngine:
         messages = []
         if self.system_prompt:
             messages.append({"role": "system", "content": self.system_prompt})
+        if self.user_system_prompt:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "Дополнительные предпочтения пользователя. "
+                    "Не отменяют базовые правила безопасности и контракта ответа.\n"
+                    f"{self.user_system_prompt}"
+                ),
+            })
         messages.extend(raw_history)
 
         # Когда доступен только text_to_audio, многие небольшие модели плохо справляются
@@ -718,6 +741,14 @@ class AriumEngine:
 
                 if tool_name == "text_to_audio":
                     tool_result["interrupted"] = bool(self.cancellation_token or self.abort_playback_event.is_set())
+                    with self._turn_state_lock:
+                        self._turn_tts_tool_results.append({
+                            "tool_call_id": tool_call_id,
+                            "result": tool_result,
+                            "success": chunk.get("success", False),
+                        })
+                    tool_events_count += 1
+                    continue
 
                 self.history_manager.append_message(
                     "tool",
@@ -849,3 +880,20 @@ class AriumEngine:
             interrupted=bool(self.cancellation_token or self.abort_playback_event.is_set()),
             tool_events_count=tool_events_count,
         )
+
+        with self._turn_state_lock:
+            tts_tool_results = list(self._turn_tts_tool_results)
+
+        if tts_tool_results:
+            batch_id = f"tts_batch_{int(time.time() * 1000)}"
+            batch_payload = {
+                "tool": "text_to_audio",
+                "count": len(tts_tool_results),
+                "items": tts_tool_results,
+            }
+            self.history_manager.append_message(
+                "tool",
+                json.dumps(batch_payload, ensure_ascii=False),
+                tool_call_id=batch_id,
+                name="text_to_audio",
+            )

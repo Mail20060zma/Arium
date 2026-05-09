@@ -1,11 +1,19 @@
 {
   "model": {
-    "qwen3_5_08b": {
-      "model": "lmstudio-community/qwen3.5-0.8b",
+    "qwen2.5-coder-7b": {
+      "model": "qwen2.5-coder:7b",
       "api_key": "",
       "provider": "ollama",
-      "model_id": "lmstudio-community/qwen3.5-0.8b",
-      "model_name": "lmstudio-community/qwen3.5-0.8b",
+      "model_id": "qwen2.5-coder-7b",
+      "model_name": "Qwen2.5-Coder 7B",
+      "base_url": "http://localhost:11434/v1"
+    },
+    "qwen3_5_4b": {
+      "model": "qwen3.5-4b",
+      "api_key": "",
+      "provider": "lm_studio",
+      "model_id": "qwen3.5-4b",
+      "model_name": "qwen3.5-4b",
       "base_url": "http://127.0.0.1:1234/v1"
     },
     "llama_4_scout": {
@@ -16,28 +24,30 @@
       "model_name": "meta-llama/llama-4-scout-17b-16e-instruct",
       "base_url": "https://g4f.space/api/groq/model"
     },
-    "gpt_5_mini": {
-      "model": "gpt_5_mini",
-      "api_key": "g4f_u_mo43yk_b96ab15d1361ae6b3ef508ab7ea2f53948b176e41489ef3b_a54e4b37",
-      "provider": "g4f",
-      "model_id": "srv_mkoloq41e34074b6133e:gpt-5-mini-2025-08-07",
-      "model_name": "gpt_5_mini",
-      "base_url": "https://g4f.space/api/custom/srv_mkoloq41e34074b6133e"
-    },
-    "claude_opus_4_6_thinking": {
-      "model": "claude_opus_4_6_thinking",
-      "api_key": "g4f_u_mo43yk_b96ab15d1361ae6b3ef508ab7ea2f53948b176e41489ef3b_a54e4b37",
-      "provider": "g4f",
-      "model_id": "srv_mkom688d57c76d8a3542:meta-llama/llama-4-scout-17b-16e-instruct",
-      "model_name": "claude-opus-4-6-thinking",
-      "base_url": "https://g4f.space/api/custom/srv_mkom688d57c76d8a3542"
+    "gemma_4_e4b": {
+      "model": "gemma_4_e4b",
+      "api_key": "",
+      "provider": "lm_studio",
+      "model_id": "google/gemma-4-e4b",
+      "model_name": "google/gemma-4-e4b",
+      "base_url": "http://127.0.0.1:1234/v1"
     }
   },
+  "current_model": "gemma_4_e4b",
+  "stt_provider": "google",
+  "stt_model": null,
+  "tts_backend": "silero",
+  "tts_silero_model": "v5_ru",
+  "tts_speaker": "kseniya",
+  "tts_xtts_model": "v2.0.2",
+  "tts_xtts_speaker": "",
+  "tts_streaming": true,
   "llm": {
     "tool_only_voice_output": true,
     "enabled_tools": [
       "text_to_audio"
-    ]
+    ],
+    "user_system_prompt": "Ты нео аниме лоли"
   },
   "memory": {
     "context_window_size": 25,
@@ -53,14 +63,5 @@
     "ptt_chunk_seconds": 0.1,
     "ptt_ring_buffer_seconds": 6.0,
     "ptt_sample_rate": 16000
-  },
-  "current_model": "gpt_5_mini",
-  "stt_provider": "whisper",
-  "stt_model": "small",
-  "tts_backend": "silero",
-  "tts_silero_model": "v5_ru",
-  "tts_speaker": "kseniya",
-  "tts_xtts_model": "v2.0.2",
-  "tts_xtts_speaker": "",
-  "tts_streaming": true
+  }
 }

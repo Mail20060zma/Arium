@@ -49,7 +49,8 @@ class Settings:
 
             "llm": {
                 "tool_only_voice_output": True,
-                "enabled_tools": ["text_to_audio"]
+                "enabled_tools": ["text_to_audio"],
+                "user_system_prompt": ""
             },
             
             # === AI Engine v2 ===
@@ -84,6 +85,24 @@ class Settings:
             
             # Валидация и мерж с дефолтной структурой (deep merge)
             self._settings = self._merge_with_defaults(loaded, self._default_settings)
+
+            def _has_nested_key(data: dict, keys: tuple[str, ...]) -> bool:
+                current = data
+                for key in keys:
+                    if not isinstance(current, dict) or key not in current:
+                        return False
+                    current = current[key]
+                return True
+
+            needs_save = False
+            if isinstance(loaded, dict):
+                if not _has_nested_key(loaded, ("llm", "user_system_prompt")):
+                    needs_save = True
+            else:
+                needs_save = True
+
+            if needs_save:
+                self._save()
             
         except json.JSONDecodeError as e:
             print(f"⚠ Ошибка парсинга {self._filepath}: {e}")

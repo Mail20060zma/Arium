@@ -1,8 +1,11 @@
 import queue
 import threading
+import logging
 from typing import Generator
 
 import speech_recognition as sr
+
+logger = logging.getLogger(__name__)
 
 
 class GoogleSTT:
@@ -55,11 +58,12 @@ class GoogleSTT:
                     except sr.UnknownValueError:
                         continue  # Просто продолжаем слушать
                     
-                    except sr.RequestError as e:
-                        # Критическая ошибка (сеть, лимиты) — пробрасываем
-                        raise sr.RequestError(f"Google Speech Recognition request failed: {e}")
+                    except sr.RequestError:
+                        # Ошибка сервиса распознавания - игнорируем и продолжаем слушать
+                        continue
                     except Exception as e:
-                        raise RuntimeError(f"Audio capture error: {e}")
+                        logger.warning(f"Audio capture error: {e}")
+                        continue
         except Exception:
             self._queue.put(None)
             raise

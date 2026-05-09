@@ -1,7 +1,3 @@
-#!/usr/bin/env python3
-"""
-Airi 3.0 - Object-Oriented AI Voice Assistant
-"""
 import sys
 import logging
 from pathlib import Path
