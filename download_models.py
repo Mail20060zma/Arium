@@ -32,7 +32,7 @@ def main():
     parser.add_argument(
         'backend',
         nargs='?',
-        default='all',
+        default='silero',
         help="Backend to download: 'silero', 'xtts', or 'all' (default: all)"
     )
     

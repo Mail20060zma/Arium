@@ -20,6 +20,7 @@ config_local.yaml
 *.db
 *.sqlite
 *.sqlite3
+.kilo
 
 # IDE
 .vscode/
@@ -66,6 +67,7 @@ audio_files/
 tmp/
 temp/
 cache/
+test/
 
 # Test files
 tests/__pycache__/
@@ -80,5 +82,12 @@ htmlcov/
 local_*
 dev_*
 .github
+
+
 123.py
 123123.py
+12*
+12*.py
+chat_history.json
+
+
