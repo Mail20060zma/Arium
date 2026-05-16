@@ -1,4 +1,5 @@
 import os
+import queue
 import threading
 import torch
 import torchaudio
@@ -58,13 +59,41 @@ class XTTSBackend(BaseTTS):
         config.load_json(config_path)
         
         self.model = Xtts.init_from_config(config)
+
         self.model.load_checkpoint(
-            config, 
-            checkpoint_dir=self.model_dir, 
+            config,
+            checkpoint_dir=self.model_dir,
             vocab_path=os.path.join(self.model_dir, "vocab.json"),
             use_deepspeed=False
         )
         self.model.to(self.device)
+
+        # === Агрессивная оптимизация для CUDA ===
+        if self.device == "cuda":
+            # 1. TF32 — ускоряет матричные операции ~2x
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+
+            # 2. Flash Attention — ускоряет механизм внимания в GPT
+            try:
+                torch.backends.cuda.enable_flash_sdp(True)
+                torch.backends.cuda.enable_mem_efficient_sdp(True)
+                print("✅ XTTS: Flash SDP включён")
+            except Exception:
+                pass
+
+            # 3. torch.compile — оптимизирует граф вычислений 
+            try:
+                if hasattr(self.model, 'gpt'):
+                    self.model.gpt = torch.compile(
+                        self.model.gpt,
+                        mode='reduce-overhead',
+                        fullgraph=False
+                    )
+                    print("✅ XTTS: torch.compile применён к GPT")
+            except Exception as e:
+                print(f"⚠️ torch.compile не применён: {e}")
+
         print("XTTS model loaded successfully.")
 
     def _get_conditioning_latents(self, speaker: Optional[str]):
@@ -88,6 +117,32 @@ class XTTSBackend(BaseTTS):
             raise FileNotFoundError(f"Reference WAV missing or speaker not found: {wav_path}")
 
         print(f"Computing conditioning latents for {speaker_name}...")
+        
+        # === ПАТЧ ДЛЯ WINDOWS (БЕЗ FFMPEG) ===
+        # Модуль torchaudio.load() часто падает на Windows из-за отсутствия ffmpeg/libtorchcodec.
+        # Мы перехватываем функцию load_audio в модуле XTTS и заменяем её на версию с soundfile.
+        try:
+            import TTS.tts.models.xtts as xtts_module
+            import soundfile as sf
+            
+            def patched_load_audio(audiopath, sampling_rate):
+                data, lsr = sf.read(audiopath, dtype='float32')
+                audio = torch.FloatTensor(data)
+                if len(audio.shape) > 1: # Stereo to mono
+                    audio = torch.mean(audio, dim=1, keepdim=True)
+                else:
+                    audio = audio.unsqueeze(0)
+                
+                if lsr != sampling_rate:
+                    audio = torchaudio.functional.resample(audio, lsr, sampling_rate)
+                
+                audio.clip_(-1, 1)
+                return audio
+
+            xtts_module.load_audio = patched_load_audio
+        except Exception as e:
+            print(f"⚠️ Не удалось применить патч load_audio: {e}")
+
         gpt_cond_latent, speaker_embedding = self.model.get_conditioning_latents(audio_path=[wav_path])
         
         torch.save((gpt_cond_latent, speaker_embedding), pth_path)
@@ -117,26 +172,71 @@ class XTTSBackend(BaseTTS):
         return output_path
 
     def stream_audio(self, text: str, abort_event: threading.Event, speaker: Optional[str] = None) -> Generator[np.ndarray, None, None]:
+        """
+        Стриминг аудио с PREFETCH: генерация следующего чанка происходит
+        в фоновом потоке, пока текущий чанк воспроизводится.
+        Это резко снижает задержку первого звука.
+        """
         if self.model is None:
             self.load_model()
-            
+
         # Compute or load conditioning latents
         gpt_cond_latent, speaker_embedding = self._get_conditioning_latents(speaker)
-        
-        chunks = self.model.inference_stream(
-            text,
-            self.language,
-            gpt_cond_latent,
-            speaker_embedding
-        )
 
-        for chunk in chunks:
-            if abort_event.is_set():
-                print("XTTS stream aborted.")
+        # Очередь буферизации: хранит до 5 сгенерированных чанков вперёд
+        prefetch_queue: queue.Queue = queue.Queue(maxsize=5)
+        generation_error = None
+
+        def _generate_in_background():
+            """Фоновый поток: генерирует чанки и кладёт в очередь."""
+            nonlocal generation_error
+            try:
+                with torch.inference_mode():
+                    chunks = self.model.inference_stream(
+                        text,
+                        self.language,
+                        gpt_cond_latent,
+                        speaker_embedding,
+                        overlap_wav_len=512,
+                        stream_chunk_size=16
+                    )
+                    for chunk in chunks:
+                        if abort_event.is_set():
+                            break
+                        prefetch_queue.put(chunk, timeout=10.0)
+                    prefetch_queue.put(None)  # Сигнал: генерация завершена
+            except Exception as e:
+                generation_error = e
+                try:
+                    prefetch_queue.put(None)
+                except queue.Full:
+                    pass
+
+        # Запускаем генерацию в фоне
+        gen_thread = threading.Thread(target=_generate_in_background, daemon=True)
+        gen_thread.start()
+
+        # Основной поток: отдаёт чанки из очереди
+        while not abort_event.is_set():
+            try:
+                chunk = prefetch_queue.get(timeout=0.5)
+            except queue.Empty:
+                if not gen_thread.is_alive():
+                    break
+                continue
+
+            if chunk is None:
+                if generation_error:
+                    raise generation_error
                 break
-                
-            # XTTS inference_stream yields PyTorch tensors, convert to numpy
-            wav_chunk = chunk.detach().cpu().numpy()
+
+            if isinstance(chunk, Exception):
+                raise chunk
+
+            if isinstance(chunk, torch.Tensor):
+                wav_chunk = chunk.detach().cpu().float().numpy()
+            else:
+                wav_chunk = np.array(chunk, dtype=np.float32)
             yield wav_chunk
             
     @property

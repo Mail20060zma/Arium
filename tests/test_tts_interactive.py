@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 import torch
 from pathlib import Path
 
@@ -37,7 +38,7 @@ def main():
     print(f"--- Тестирование TTS ---")
     print(f"Доступное устройство по умолчанию: {default_device}")
     
-    device_choice = input(f"Введите устройство (cuda/cpu) [По умолчанию: {default_device}]: ").strip().lower()
+    device_choice = 'cuda' #input(f"Введите устройство (cuda/cpu) [По умолчанию: {default_device}]: ").strip().lower()
     device = device_choice if device_choice in ['cuda', 'cpu'] else default_device
     print(f"Используемое устройство: {device}")
     
@@ -46,13 +47,21 @@ def main():
     print("1. Silero (Быстрый, русский голос 'kseniya')")
     print("2. XTTS (Более качественный, требует больше ресурсов)")
     
-    choice = input("Ваш выбор (1/2, по умолчанию 1): ").strip() or "1"
+    choice = "2" #input("Ваш выбор (1/2, по умолчанию 1): ").strip() or "1"
     
     try:
         if choice == "1":
             print("Загрузка Silero TTS...")
             tts = SileroTTS(language='ru', model_id='v5_ru', speaker='kseniya', device=device)
         elif choice == "2":
+            os.environ["DS_BUILD_OPS"] = "0"
+            os.environ["DS_BUILD_AIO"] = "0"
+            os.environ["DS_BUILD_EVOFORMER_ATTN"] = "0"
+            os.environ["DS_BUILD_SPARSE_ATTN"] = "0"
+            os.environ["DS_BUILD_FP_QUANTIZER"] = "0"
+            # Также можно запретить setuptools искать Visual Studio (на всякий случай)
+            os.environ["DISTUTILS_USE_SDK"] = "0"
+            
             print("Загрузка XTTS v2...")
             model_dir = str(project_root / "app" / "model" / "xtts")
             os.makedirs(model_dir, exist_ok=True)
@@ -61,8 +70,10 @@ def main():
             print("Неверный выбор. Используем Silero.")
             tts = SileroTTS(language='ru', model_id='v5_ru', speaker='kseniya', device=device)
             
-        print("✅ Бэкенд готов!")
-        
+        print("✅ Бэкенд готов! Прогрев модели...")
+        # Прогрев модели для предотвращения лагов на первой фразе
+        list(tts.stream_audio("Прогрев", threading.Event()))
+
         while True:
             print("\nВведите текст для синтеза (или 'exit' для выхода, 'file' для чтения из tests/data/test_samples.txt):")
             text = input("> ").strip()

@@ -13,7 +13,11 @@ from app.utils.settings import Settings
 from app.data.history_manager import HistoryManager
 from app.engine.event_dispatcher import EventDispatcher
 from app.LLM.universal_openai import UniversalOpenAIHandler
-from app.tools.text_processing import split_text_to_sentences
+from app.tools.text_processing import (
+    split_text_to_sentences,
+    normalize_words,
+    compute_word_timings_from_weight,
+)
 from app.tools.instructions import SYSTEM_PROMPT, build_tools_use
 from app.tools import get_tool_handlers
 
@@ -47,6 +51,18 @@ class AriumEngine:
         self._turn_state_lock = threading.Lock()
         self._ai_request_queue = queue.Queue()
         self._ai_worker_thread: Optional[threading.Thread] = None
+
+        # Word-level spoken tracking state
+        self._spoken_words: List[str] = []
+        self._spoken_words_lock = threading.Lock()
+        self._tts_ms_per_weight = float(self.settings.get('tts.word_ms_per_weight_ms', 85.0))
+        self._tts_ms_per_weight_alpha = float(self.settings.get('tts.word_ms_per_weight_ema_alpha', 0.2))
+        self._tts_ms_per_weight_min = 20.0
+        self._tts_ms_per_weight_max = 300.0
+
+        # TTS output stream handle for immediate abort
+        self._tts_stream_lock = threading.Lock()
+        self._tts_stream_out: Optional[sd.OutputStream] = None
         
         self._init_components()
 
@@ -181,6 +197,48 @@ class AriumEngine:
                 return
             time.sleep(0.02)
 
+    def _reset_spoken_words_state(self) -> None:
+        """Сбрасывает пословный буфер текущего ответа."""
+        with self._spoken_words_lock:
+            self._spoken_words = []
+        self.current_ai_text_spoken = ""
+
+    def _append_spoken_words(self, words: List[str]) -> None:
+        """Добавляет реально произнесенные слова в историю текущего ответа."""
+        if not words:
+            return
+        with self._spoken_words_lock:
+            self._spoken_words.extend(words)
+            self.current_ai_text_spoken = " ".join(self._spoken_words)
+
+    def _update_ms_per_weight(self, duration_ms: int, total_weight: int) -> None:
+        """Обновляет оценку ms_per_weight на основе фактической длительности."""
+        if duration_ms <= 0 or total_weight <= 0:
+            return
+        target = duration_ms / max(total_weight, 1)
+        target = max(self._tts_ms_per_weight_min, min(self._tts_ms_per_weight_max, target))
+        alpha = min(max(self._tts_ms_per_weight_alpha, 0.0), 1.0)
+        self._tts_ms_per_weight = (alpha * target) + ((1.0 - alpha) * self._tts_ms_per_weight)
+
+    def _stop_tts_output_stream(self) -> None:
+        """Немедленно останавливает вывод TTS, чтобы прерывание было мгновенным."""
+        with self._tts_stream_lock:
+            if self._tts_stream_out is None:
+                return
+            try:
+                self._tts_stream_out.abort()
+            except Exception:
+                pass
+            try:
+                self._tts_stream_out.stop()
+            except Exception:
+                pass
+            try:
+                self._tts_stream_out.close()
+            except Exception:
+                pass
+            self._tts_stream_out = None
+
     def _interrupt_ai_output(self, source: str = "user_interrupt") -> bool:
         """Немедленно прерывает текущую озвучку и очищает очередь TTS."""
         has_pending_output = self.is_speaking or (not self.tts_sentence_queue.empty())
@@ -189,6 +247,7 @@ class AriumEngine:
 
         self.cancellation_token = True
         self.abort_playback_event.set()
+        self._stop_tts_output_stream()
         with self.tts_sentence_queue.mutex:
             self.tts_sentence_queue.queue.clear()
 
@@ -553,12 +612,21 @@ class AriumEngine:
         
         def _get_audio_stream(samplerate):
             nonlocal stream_out
-            if stream_out and stream_out.samplerate != samplerate:
-                stream_out.close()
-                stream_out = None
-            if not stream_out:
-                stream_out = sd.OutputStream(samplerate=samplerate, channels=1, dtype='float32')
-                stream_out.start()
+            with self._tts_stream_lock:
+                if self._tts_stream_out and self._tts_stream_out.samplerate != samplerate:
+                    try:
+                        self._tts_stream_out.close()
+                    except Exception:
+                        pass
+                    self._tts_stream_out = None
+                if not self._tts_stream_out:
+                    self._tts_stream_out = sd.OutputStream(
+                        samplerate=samplerate,
+                        channels=1,
+                        dtype='float32',
+                    )
+                    self._tts_stream_out.start()
+                stream_out = self._tts_stream_out
             return stream_out
 
         while self.running:
@@ -578,11 +646,37 @@ class AriumEngine:
             try:
                 if hasattr(self.tts, 'stream_audio'):
                     out = _get_audio_stream(self.tts.sample_rate)
+                    words = normalize_words(sentence)
+                    word_timings = compute_word_timings_from_weight(words, self._tts_ms_per_weight)
+                    next_word_index = 0
+                    total_samples = 0
+                    total_weight = sum(max(len(word), 1) for word in words)
+
                     for chunk in self.tts.stream_audio(sentence, self.abort_playback_event):
                         if self.abort_playback_event.is_set():
                             break
+                        if chunk is None:
+                            continue
                         out.write(chunk)
+
+                        if words:
+                            chunk_arr = np.asarray(chunk, dtype=np.float32)
+                            if chunk_arr.ndim > 1:
+                                chunk_arr = chunk_arr.reshape(-1)
+                            total_samples += chunk_arr.size
+                            elapsed_ms = (total_samples / self.tts.sample_rate) * 1000.0
+
+                            while next_word_index < len(word_timings) and elapsed_ms >= word_timings[next_word_index]["start_ms"]:
+                                self._append_spoken_words([word_timings[next_word_index]["word"]])
+                                next_word_index += 1
+
                     sentence_completed = not self.abort_playback_event.is_set()
+                    if sentence_completed and words:
+                        if next_word_index < len(words):
+                            self._append_spoken_words(words[next_word_index:])
+                        if total_samples > 0 and total_weight > 0:
+                            duration_ms = int(round((total_samples / self.tts.sample_rate) * 1000.0))
+                            self._update_ms_per_weight(duration_ms, total_weight)
                 else:
                     # Фолбэк для TTS движков без stream_audio
                     file_path = self.tts.synthesize_to_file(sentence, str(Path(self.settings._filepath).parent.parent / "audio_output" / "temp.wav"))
@@ -596,16 +690,17 @@ class AriumEngine:
                     if self.abort_playback_event.is_set():
                         pygame.mixer.stop()
                     sentence_completed = not self.abort_playback_event.is_set()
+                    if sentence_completed:
+                        self._append_spoken_words(normalize_words(sentence))
                     
             except Exception as e:
                 logger.error(f"Ошибка воспроизведения звука: {e}")
-                
-            # Добавляем в spoken-текст только полностью завершенные предложения.
-            if sentence_completed:
-                self.current_ai_text_spoken += sentence + " "
+            
+            # Добавляем в spoken-текст только реально произнесенные слова (по факту).
             
             if self.abort_playback_event.is_set():
                 logger.debug("[TTS] Сброс воспроизведения по флагу (Abort/Interrupt)...")
+                self._stop_tts_output_stream()
                 # Сброс флагов после полной остановки
                 self.is_speaking = False
                 # Очистка очереди (выкидываем оставшиеся предложения)
@@ -639,7 +734,7 @@ class AriumEngine:
         logger.debug("[AI] Старт новой генерации, сброс turn-state")
         self.cancellation_token = False
         self.abort_playback_event.clear()
-        self.current_ai_text_spoken = ""
+        self._reset_spoken_words_state()
         self.current_reasoning_content = ""
         self.last_ai_message_id = None
         with self._turn_state_lock:

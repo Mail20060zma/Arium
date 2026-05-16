@@ -14,6 +14,40 @@ def is_ssml(text: str) -> bool:
     return '<speak' in text or '<prosody' in text or '<break' in text or '</speak>' in text
 
 
+def strip_ssml_tags(text: str) -> str:
+    """Удаляет SSML-теги, оставляя только текст."""
+    return re.sub(r"<[^>]+>", " ", text)
+
+
+def normalize_words(text: str) -> List[str]:
+    """Возвращает список слов без пунктуации и SSML-тегов."""
+    if not text:
+        return []
+    if is_ssml(text):
+        text = strip_ssml_tags(text)
+    return re.findall(r"[^\W_]+", text, flags=re.UNICODE)
+
+
+def compute_word_timings_from_weight(words: List[str], ms_per_weight: float) -> List[Dict[str, object]]:
+    """Оценивает тайминги слов из веса (длина слова) и ms_per_weight."""
+    timings: List[Dict[str, object]] = []
+    if not words:
+        return timings
+
+    cursor = 0.0
+    for word in words:
+        weight = max(len(word), 1)
+        start_ms = int(round(cursor))
+        cursor += weight * ms_per_weight
+        end_ms = int(round(cursor))
+        timings.append({
+            "word": word,
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+        })
+    return timings
+
+
 def split_ssml_preserving(text: str) -> List[str]:
     """
     Разбивает SSML текст на предложения, сохраняя теги.
