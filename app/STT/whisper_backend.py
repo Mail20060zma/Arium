@@ -16,7 +16,7 @@ class WhisperSTT:
     # Официальные имена моделей Whisper
     OFFICIAL_MODELS = {"tiny", "base", "small", "medium", "large", "large-v2", "large-v3", "large-v3-turbo"}
 
-    def __init__(self, model_name: str, model_dir: Path | str):
+    def __init__(self, model_name: str, model_dir: Path | str, device: str | None = None):
         if model_name is None:
             raise ValueError("Whisper backend requires a valid model_name (not None)")
         
@@ -25,8 +25,8 @@ class WhisperSTT:
             print(f"⚠️  Предупреждение: модель '{model_name}' не в списке официальных ({self.OFFICIAL_MODELS})")
             print(f"    Возможные варианты: 'tiny', 'base', 'small', 'medium', 'large', 'large-v2', 'large-v3'")
         
-        # Автоматическое определение устройства
-        self.device = self._get_device()
+        # Определение устройства
+        self.device = device if device else self._get_device()
         self.use_fp16 = self._should_use_fp16(self.device)
         
         self.model_dir = Path(model_dir)
@@ -70,9 +70,11 @@ class WhisperSTT:
     @staticmethod
     def _should_use_fp16(device: str) -> bool:
         """Определяет, следует ли использовать FP16 (только для современных GPU)."""
-        if device == "cuda":
+        if device.startswith("cuda"):
             try:
-                major, minor = torch.cuda.get_device_capability(0)
+                # Get index if specified (e.g., cuda:1)
+                idx = int(device.split(":")[1]) if ":" in device else 0
+                major, minor = torch.cuda.get_device_capability(idx)
                 # FP16 стабилен на архитектурах >= 7.0 (Turing и новее)
                 return (major > 7) or (major == 7 and minor >= 5)
             except:

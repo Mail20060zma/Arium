@@ -86,13 +86,59 @@ def split_ssml_preserving(text: str) -> List[str]:
     return restored_sentences
 
 
-def split_text_to_sentences(text: str) -> List[str]:
+def split_long_sentence(sentence: str, max_len: int = 160) -> List[str]:
+    """Разбивает длинное предложение по запятым или другим разделителям, чтобы уложиться в max_len."""
+    if len(sentence) <= max_len:
+        return [sentence]
+        
+    parts = []
+    # Пытаемся разбить по запятым, двоеточиям, точкам с запятой
+    chunks = re.split(r'(?<=[,;:—])\s+', sentence)
+    
+    current_part = ""
+    for chunk in chunks:
+        if not current_part:
+            current_part = chunk
+        elif len(current_part) + 1 + len(chunk) <= max_len:
+            current_part += " " + chunk
+        else:
+            parts.append(current_part)
+            current_part = chunk
+            
+    if current_part:
+        parts.append(current_part)
+        
+    # Если даже после этого есть куски больше max_len, рубим по пробелам
+    final_parts = []
+    for part in parts:
+        if len(part) <= max_len:
+            final_parts.append(part)
+        else:
+            words = part.split()
+            cur = ""
+            for word in words:
+                if not cur:
+                    cur = word
+                elif len(cur) + 1 + len(word) <= max_len:
+                    cur += " " + word
+                else:
+                    final_parts.append(cur)
+                    cur = word
+            if cur:
+                final_parts.append(cur)
+                
+    return final_parts
+
+
+def split_text_to_sentences(text: str, max_len: int = 160) -> List[str]:
     """
     Разбивает текст на предложения.
     Корректно обрабатывает SSML и обычный текст.
+    Обеспечивает, что длина каждого куска не превышает max_len (важно для XTTS).
     
     Args:
         text: Текст для разбиения
+        max_len: Максимальная длина одного куска
     
     Returns:
         Список предложений
@@ -104,14 +150,22 @@ def split_text_to_sentences(text: str) -> List[str]:
     
     # Если это SSML - используем специальное разбиение
     if is_ssml(text):
-        return split_ssml_preserving(text)
+        base_sentences = split_ssml_preserving(text)
+    else:
+        # Обычное разбиение на предложения
+        base_sentences = re.split(r'(?<=[.!?])\s+', text)
     
-    # Обычное разбиение на предложения
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    
-    # Фильтруем пустые предложения и очищаем
-    result = [s.strip() for s in sentences if s.strip()]
-    
+    # Дополнительно разбиваем длинные предложения
+    result = []
+    for s in base_sentences:
+        s = s.strip()
+        if not s:
+            continue
+        if len(s) > max_len:
+            result.extend(split_long_sentence(s, max_len))
+        else:
+            result.append(s)
+            
     return result
 
 
@@ -180,3 +234,20 @@ def prepare_messages_for_api(messages: List[Dict[str, Any]],
             })
     
     return api_messages
+
+
+def extract_clean_text(text: str) -> str:
+    """Очищает текст от служебных тегов локальных tool call-ов."""
+    if not text:
+        return ""
+    
+    cleaned = text.strip()
+    
+    # 1. Удаляем префикс <|tool_call>call:text_to_audio{text:<|...
+    # Например: <|tool_call>call:text_to_audio{text:<|"|> или <|tool_call>call:text_to_audio{text:<|\"|>
+    cleaned = re.sub(r'^<\|tool_call\|?>\s*call:text_to_audio\s*\{\s*text\s*:\s*<\|[\\\"\'\s\|><]*', '', cleaned, flags=re.IGNORECASE)
+    
+    # 2. Удаляем постфикс ... |>}<tool_call|>
+    cleaned = re.sub(r'[\\\"\'\s\|><]*\s*\}\s*<tool_call\|?>$', '', cleaned, flags=re.IGNORECASE)
+    
+    return cleaned.strip()

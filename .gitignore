@@ -89,5 +89,5 @@ dev_*
 12*
 12*.py
 chat_history.json
-
-
+repomix-output.xml
+settings.json

@@ -112,6 +112,9 @@ class HistoryManager:
         with self._history_lock:
             if action == "add":
                 msg = event["message"]
+                # Удаляем ненужные ключи
+                for key in ["spoken_text", "model", "tool_results"]:
+                    msg.pop(key, None)
                 if "id" not in msg:
                     msg["id"] = f"msg_{uuid4().hex}"
                 self._history.append(msg)
@@ -122,16 +125,60 @@ class HistoryManager:
                 for m in reversed(self._history):
                     if m.get("id") == msg_id:
                         m["content"] = new_text
-                        m["spoken_text"] = new_text
+                        m.pop("spoken_text", None)
+                        m.pop("model", None)
+                        m.pop("tool_results", None)
+                        
+                        # Также урезаем текст в аргументах tool_calls (text_to_audio)
+                        tool_calls = m.get("tool_calls")
+                        if isinstance(tool_calls, list):
+                            for tc in tool_calls:
+                                if not isinstance(tc, dict):
+                                    continue
+                                fn = tc.get("function")
+                                if isinstance(fn, dict) and fn.get("name") == "text_to_audio":
+                                    args_str = fn.get("arguments", "{}")
+                                    try:
+                                        args = json.loads(args_str) if isinstance(args_str, str) else args_str
+                                        if isinstance(args, dict):
+                                            args["text"] = new_text
+                                            fn["arguments"] = json.dumps(args, ensure_ascii=False)
+                                    except Exception as e:
+                                        logger.warning(f"Failed to update tool_call text on truncate: {e}")
+                                    
+                                    # Находим соответствующий tool-ответ в истории и урезаем его
+                                    tc_id = tc.get("id")
+                                    if tc_id:
+                                        for tool_msg in reversed(self._history):
+                                            if tool_msg.get("role") == "tool" and tool_msg.get("tool_call_id") == tc_id:
+                                                try:
+                                                    tool_content = json.loads(tool_msg.get("content", "{}"))
+                                                    if isinstance(tool_content, dict) and "status" in tool_content:
+                                                        tool_content["status"] = "interrupted"
+                                                        tool_content["text_spoken"] = new_text
+                                                        tool_content["interrupted"] = True
+                                                        tool_msg["content"] = json.dumps(tool_content, ensure_ascii=False)
+                                                    else:
+                                                        tool_msg["content"] = new_text
+                                                except ValueError:
+                                                    # Это не JSON, просто строка
+                                                    tool_msg["content"] = new_text
+                                                except Exception as e:
+                                                    logger.warning(f"Failed to update tool response on truncate: {e}")
+                                        
                         logger.debug(f"Truncated message {msg_id} to {len(new_text)} chars.")
                         break
 
             elif action == "update":
                 msg_id = event["msg_id"]
                 updates = event.get("updates", {})
+                for key in ["spoken_text", "model", "tool_results"]:
+                    updates.pop(key, None)
                 for m in reversed(self._history):
                     if m.get("id") == msg_id:
                         m.update(updates)
+                        for key in ["spoken_text", "model", "tool_results"]:
+                            m.pop(key, None)
                         logger.debug(f"Updated message {msg_id} fields: {list(updates.keys())}")
                         break
                         
@@ -205,7 +252,7 @@ class HistoryManager:
     ) -> List[Dict[str, Any]]:
         """
         Получить окно контекста для отправки в LLM.
-        Возвращает чистые сообщения (без внутренних метаданных).
+        Возвращает чистые сообщения (без внутренних метаданных), совместимые с OpenAI API.
         """
         if limit is None:
             limit = self.max_context_window
@@ -214,75 +261,77 @@ class HistoryManager:
             # Берем последние limit сообщений
             recent = self._history[-limit:] if limit > 0 else self._history
             
-            # Формируем каноничный формат Chat Completions.
-            # В контекст отправляем только официальные поля role/content/tool_calls/tool_call_id/name.
             api_messages = []
-            tool_messages_in_turn = 0
-            max_tool_messages_per_turn = 4
+            skipped_tool_call_ids = set()
+            
             for m in recent:
                 role = str(m.get("role", "user"))
-                content = m.get("content", "")
-
+                
                 if role in {"user", "system", "developer"}:
-                    tool_messages_in_turn = 0
-
+                    api_messages.append({
+                        "role": role,
+                        "content": m.get("content") or ""
+                    })
+                    continue
+                    
                 if role == "assistant":
-                    if isinstance(m.get("tool_calls"), list) and m.get("tool_calls"):
-                        if tool_messages_in_turn >= max_tool_messages_per_turn:
-                            continue
-                        tool_messages_in_turn += 1
-
                     msg = {"role": "assistant"}
+                    
+                    # 1. Обработка reasoning_content
+                    if include_reasoning and m.get("reasoning_content"):
+                        reasoning = str(m.get("reasoning_content"))
+                        if len(reasoning) > reasoning_max_chars:
+                            reasoning = reasoning[:reasoning_max_chars] + "..."
+                        msg["reasoning_content"] = reasoning
+                        
+                    # 2. Обработка tool_calls
                     tool_calls = m.get("tool_calls")
-                    if isinstance(tool_calls, list) and tool_calls:
-                        # Tool-calls озвучки не нужны в будущем контексте и могут вызывать шум/циклы.
-                        names = []
+                    filtered_tool_calls = []
+                    if isinstance(tool_calls, list):
                         for tc in tool_calls:
                             if not isinstance(tc, dict):
                                 continue
+                            
+                            # Проверяем имя функции
+                            func_name = ""
                             fn = tc.get("function")
                             if isinstance(fn, dict):
-                                names.append(str(fn.get("name", "")))
-                        if names and all(name == "text_to_audio" for name in names):
-                            continue
-
-                        msg["tool_calls"] = tool_calls
-                        msg["content"] = content if content is not None else None
+                                func_name = str(fn.get("name", ""))
+                            
+                            filtered_tool_calls.append(tc)
+                            
+                    if filtered_tool_calls:
+                        msg["tool_calls"] = filtered_tool_calls
+                        # OpenAI разрешает content быть null при наличии tool_calls
+                        msg["content"] = m.get("content")
                     else:
-                        msg["content"] = "" if content is None else str(content)
+                        # Если tool_calls отсутствуют или отфильтрованы, content должен быть строкой
+                        content_val = m.get("content")
+                        msg["content"] = str(content_val) if content_val is not None else ""
+                        
                     api_messages.append(msg)
                     continue
-
+                    
                 if role == "tool":
-                    if tool_messages_in_turn >= max_tool_messages_per_turn:
-                        continue
-
                     tool_call_id = m.get("tool_call_id")
-                    if not tool_call_id:
+                    tool_name = m.get("name")
+                    
+                    # Проверяем, нужно ли пропустить этот ответ инструмента
+                    if tool_call_id and str(tool_call_id) in skipped_tool_call_ids:
+                        skipped_tool_call_ids.discard(str(tool_call_id))
                         continue
-
-                    if str(m.get("name", "")) == "text_to_audio":
-                        continue
-
-                    tool_messages_in_turn += 1
-
-                    msg = {
+                        
+                    tool_msg = {
                         "role": "tool",
-                        "tool_call_id": str(tool_call_id),
-                        "content": "" if content is None else str(content),
+                        "tool_call_id": str(tool_call_id) if tool_call_id else "",
+                        "content": m.get("content") or ""
                     }
-                    if "name" in m and m.get("name"):
-                        msg["name"] = str(m.get("name"))
-                    api_messages.append(msg)
+                    if tool_name:
+                        tool_msg["name"] = str(tool_name)
+                        
+                    api_messages.append(tool_msg)
                     continue
-
-                if role in {"user", "system", "developer"}:
-                    msg = {
-                        "role": role,
-                        "content": "" if content is None else str(content),
-                    }
-                    api_messages.append(msg)
-
+                    
             return api_messages
 
     def get_last_message_id(self, role: str = "assistant") -> Optional[str]:

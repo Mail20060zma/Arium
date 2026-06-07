@@ -17,13 +17,14 @@ def _get_project_root() -> Path:
     return current_file.parent.parent
 
 
-def create_stt(backend: str, model_name: str | None):
+def create_stt(backend: str, model_name: str | None, device: str | None = None):
     """
     Фабричная функция для создания экземпляра STT с выбранным бэкендом.
     
     Args:
         backend: 'vosk', 'whisper' или 'google'
         model_name: имя модели для vosk/whisper, None для google
+        device: устройство ('cuda', 'cuda:1', 'cpu') для whisper
     
     Returns:
         Экземпляр соответствующего класса STT
@@ -41,7 +42,7 @@ def create_stt(backend: str, model_name: str | None):
     elif backend == "whisper":
         if model_name is None:
             raise ValueError("Whisper backend requires a valid model_name (not None)")
-        return WhisperSTT(model_name, model_dir=model_dir / "whisper")
+        return WhisperSTT(model_name, model_dir=model_dir / "whisper", device=device)
     elif backend == "google":
         if model_name is not None:
             raise ValueError("Google backend requires model_name=None")

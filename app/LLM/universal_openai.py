@@ -58,6 +58,83 @@ class UniversalOpenAIHandler(BaseLLMHandler):
     def get_token_stats(self) -> Dict[str, float]:
         return self.token_stats
 
+    def _map_arguments(self, func: Callable, tool_args_str: Any) -> Dict[str, Any]:
+        """
+        Преобразует arguments в словарь и сопоставляет с сигнатурой функции func.
+        """
+        import inspect
+
+        # 1. Парсим arguments в словарь
+        args_dict = {}
+        if isinstance(tool_args_str, str):
+            tool_args_str_stripped = tool_args_str.strip()
+            if tool_args_str_stripped:
+                try:
+                    args_dict = json.loads(tool_args_str_stripped)
+                    # Если распарсилось в строку (двойное кодирование), пробуем еще раз
+                    if isinstance(args_dict, str):
+                        try:
+                            args_dict = json.loads(args_dict)
+                        except Exception:
+                            pass
+                except Exception:
+                    # Если это не JSON, но строка, трактуем как первый позиционный аргумент
+                    args_dict = {"text": tool_args_str_stripped}
+        elif isinstance(tool_args_str, dict):
+            args_dict = tool_args_str
+        else:
+            args_dict = {}
+
+        # 2. Получаем сигнатуру целевой функции
+        try:
+            sig = inspect.signature(func)
+        except Exception:
+            # Если не удалось получить сигнатуру, возвращаем как есть
+            return args_dict if isinstance(args_dict, dict) else {}
+
+        # 3. Сопоставляем ключи по сигнатуре
+        # Проверяем, принимает ли функция **kwargs
+        has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+        if has_kwargs:
+            return args_dict if isinstance(args_dict, dict) else {}
+
+        mapped_args = {}
+        params = sig.parameters
+        
+        # Получаем параметры без self/cls (в сигнатуре связанных методов self отсутствует)
+        all_params = [p for p in params.values() if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)]
+
+        if isinstance(args_dict, dict):
+            # Проходимся по параметрам функции
+            for param_name, param in params.items():
+                if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+                    continue
+                
+                # Если имя ключа точно совпадает
+                if param_name in args_dict:
+                    mapped_args[param_name] = args_dict[param_name]
+                # Иначе, если параметр обязательный и у нас ровно один ожидаемый параметр
+                elif param.default == inspect.Parameter.empty and len(all_params) == 1:
+                    # Пробуем достать хоть какое-то строковое или единственное значение из args_dict
+                    if len(args_dict) == 1:
+                        mapped_args[param_name] = list(args_dict.values())[0]
+                    else:
+                        # Ищем среди частых имен параметров (text, query, location)
+                        for alt_key in ["text", "query", "location", "value", "content"]:
+                            if alt_key in args_dict:
+                                mapped_args[param_name] = args_dict[alt_key]
+                                break
+                        else:
+                            # В крайнем случае берем первое значение
+                            if args_dict:
+                                mapped_args[param_name] = list(args_dict.values())[0]
+        else:
+            # Если args_dict каким-то образом не словарь, но у нас один параметр, назначим его
+            if len(all_params) == 1:
+                mapped_args[all_params[0].name] = args_dict
+
+        return mapped_args
+
     def execute_tool(self, tool_call: Any, tool_name: str) -> Dict[str, Any]:
         """Выполнение одного инструмента синхронно"""
         tool_args_str = tool_call.function.arguments
@@ -72,8 +149,8 @@ class UniversalOpenAIHandler(BaseLLMHandler):
             }
             
         try:
-            args_dict = json.loads(tool_args_str) if isinstance(tool_args_str, str) and tool_args_str.strip() else {}
             func = self.tool_handlers[tool_name]
+            args_dict = self._map_arguments(func, tool_args_str)
             result = func(**args_dict) if args_dict else func()
             return {
                 "tool_call_id": tool_call.id,

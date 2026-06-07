@@ -1,9 +1,12 @@
 """Регистрация инструментов для LLM runtime."""
 
 from datetime import datetime
-from typing import Callable, Dict, Iterable, Optional
+from typing import Callable, Dict, Iterable, Optional, Any
 
 from app.tools.audio import TOOL_HANDLERS as AUDIO_TOOL_HANDLERS
+from app.tools.weather import get_weather
+from app.tools.search import search_web
+from app.data.vector_memory import vector_memory
 
 
 def _not_implemented_tool(tool_name: str) -> Dict[str, str]:
@@ -24,6 +27,37 @@ def _get_current_time() -> Dict[str, str]:
 	}
 
 
+def _ignore_user_handler(reason: str = "") -> Dict[str, str]:
+	return {
+		"status": "success",
+		"message": f"Ок, я промолчу. Причина: {reason}"
+	}
+
+
+def _memory_save_handler(content: str, category: str = "general") -> Dict[str, str]:
+    res = vector_memory.save_memory(content, category)
+    return {"status": "success", "message": res}
+
+
+def _memory_search_handler(query: str) -> Dict[str, Any]:
+    res = vector_memory.search_memory(query)
+    if not res:
+        return {"status": "success", "message": "Ничего не найдено по этому запросу."}
+    return {"status": "success", "results": res}
+
+
+def _memory_delete_handler(memory_id: str) -> Dict[str, str]:
+    res = vector_memory.delete_memory(memory_id)
+    return {"status": "success", "message": res}
+
+
+def _memory_list_handler() -> Dict[str, Any]:
+    res = vector_memory.list_memories()
+    if not res:
+        return {"status": "success", "message": "Память пуста."}
+    return {"status": "success", "results": res}
+
+
 def get_tool_handlers(
 	text_to_audio_handler: Optional[Callable] = None,
 	enabled_tools: Optional[Iterable[str]] = None,
@@ -35,9 +69,14 @@ def get_tool_handlers(
 		enabled_tools: Если задан, возвращаются только перечисленные инструменты.
 	"""
 	handlers: Dict[str, Callable] = {
-		"search_web": lambda query: _not_implemented_tool("search_web"),
-		"get_weather": lambda location: _not_implemented_tool("get_weather"),
+		"search_web": search_web,
+		"get_weather": get_weather,
 		"get_current_time": _get_current_time,
+		"ignore_user": _ignore_user_handler,
+		"memory_save": _memory_save_handler,
+		"memory_search": _memory_search_handler,
+		"memory_delete": _memory_delete_handler,
+		"memory_list": _memory_list_handler,
 	}
 
 	# По умолчанию используем реализацию из audio.py, но core может подменить своим хендлером.

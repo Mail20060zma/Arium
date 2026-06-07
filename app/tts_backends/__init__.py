@@ -11,11 +11,12 @@ def get_tts_engine(settings) -> BaseTTS:
     if backend == 'xtts':
         model_dir = str(Path(__file__).parent.parent / "model" / "xtts")
         os.makedirs(model_dir, exist_ok=True)
-        return XTTSBackend(model_dir=model_dir, language='ru')
+        device = settings.get('system_device', 'cuda' if torch.cuda.is_available() else 'cpu')
+        return XTTSBackend(model_dir=model_dir, language='ru', device=device)
     elif backend == 'silero':
         speaker = settings.get('tts_speaker', 'kseniya')
         model_id = settings.get('tts_silero_model', 'v5_ru')
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        device = settings.get('system_device', 'cuda' if torch.cuda.is_available() else 'cpu')
         return SileroTTS(language='ru', model_id=model_id, speaker=speaker, device=device)
     else:
         raise ValueError(f"Unknown TTS backend: {backend}")
@@ -32,7 +33,9 @@ def get_tts_engine_by_name(backend_name: str, **kwargs) -> BaseTTS:
     Returns:
         BaseTTS instance
     """
-    device = kwargs.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
+    from app.utils.settings import Settings
+    settings = Settings().get_all()
+    device = kwargs.get('device', settings.get("system_device", 'cuda' if torch.cuda.is_available() else 'cpu'))
     
     if backend_name == 'silero':
         speaker = kwargs.get('speaker', 'kseniya')
@@ -41,7 +44,7 @@ def get_tts_engine_by_name(backend_name: str, **kwargs) -> BaseTTS:
     elif backend_name == 'xtts':
         model_dir = kwargs.get('model_dir', str(Path(__file__).parent.parent / "model" / "xtts"))
         os.makedirs(model_dir, exist_ok=True)
-        return XTTSBackend(model_dir=model_dir, language='ru')
+        return XTTSBackend(model_dir=model_dir, language='ru', device=device)
     else:
         raise ValueError(f"Unknown TTS backend: {backend_name}. Choose 'silero' or 'xtts'")
 

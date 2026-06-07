@@ -18,7 +18,7 @@ from app.tools.text_processing import (
     normalize_words,
     compute_word_timings_from_weight,
 )
-from app.tools.instructions import SYSTEM_PROMPT, build_tools_use
+from app.tools.instructions import get_system_prompt, build_tools_use
 from app.tools import get_tool_handlers
 
 from app.STT import create_stt
@@ -54,11 +54,16 @@ class AriumEngine:
 
         # Word-level spoken tracking state
         self._spoken_words: List[str] = []
-        self._spoken_words_lock = threading.Lock()
+        self._spoken_words_lock = threading.RLock()
         self._tts_ms_per_weight = float(self.settings.get('tts.word_ms_per_weight_ms', 85.0))
         self._tts_ms_per_weight_alpha = float(self.settings.get('tts.word_ms_per_weight_ema_alpha', 0.2))
         self._tts_ms_per_weight_min = 20.0
         self._tts_ms_per_weight_max = 300.0
+
+        # Word-level spoken tracking state (precise tracking for interrupt)
+        self._current_playback_start_time = None
+        self._current_word_timings = []
+        self._current_word_index = 0
 
         # TTS output stream handle for immediate abort
         self._tts_stream_lock = threading.Lock()
@@ -97,7 +102,8 @@ class AriumEngine:
             self.enabled_tools = ['text_to_audio']
 
         self.tool_only_voice_output = bool(self.settings.get('llm.tool_only_voice_output', True))
-        self.system_prompt = SYSTEM_PROMPT.strip()
+        backend = self.settings.get('tts_backend', 'silero')
+        self.system_prompt = get_system_prompt(backend).strip()
         user_prompt_raw = self.settings.get('llm.user_system_prompt', '')
         self.user_system_prompt = (str(user_prompt_raw).strip() if user_prompt_raw is not None else "")
         self.tools_definitions = build_tools_use(self.enabled_tools)
@@ -112,6 +118,8 @@ class AriumEngine:
         logger.info("🔧 Инициализация STT...")
         stt_provider = self.settings.get('stt_provider', 'whisper')
         stt_model = self.settings.get('stt_model', 'small')
+        system_device = self.settings.get('system_device', 'cuda' if __import__('torch').cuda.is_available() else 'cpu')
+        
         if stt_provider == 'google':
             if stt_model is not None:
                 normalized = str(stt_model).strip().lower()
@@ -119,7 +127,18 @@ class AriumEngine:
                     self.settings.set('stt_model', None)
             stt_model = None
 
-        self.stt = create_stt(stt_provider, stt_model)
+        self.stt = create_stt(stt_provider, stt_model, device=system_device)
+
+        logger.info("🔧 Инициализация VAD (Silero)...")
+        import torch
+        self.device = system_device
+        self.vad_model, _ = torch.hub.load(
+            repo_or_dir='snakers4/silero-vad',
+            model='silero_vad',
+            force_reload=False,
+            trust_repo=True
+        )
+        self.vad_model.to(self.device)
 
         logger.info("🔧 Инициализация Универсального LLM...")
         tool_handlers = get_tool_handlers(
@@ -202,6 +221,9 @@ class AriumEngine:
         with self._spoken_words_lock:
             self._spoken_words = []
         self.current_ai_text_spoken = ""
+        self._current_playback_start_time = None
+        self._current_word_timings = []
+        self._current_word_index = 0
 
     def _append_spoken_words(self, words: List[str]) -> None:
         """Добавляет реально произнесенные слова в историю текущего ответа."""
@@ -247,20 +269,27 @@ class AriumEngine:
 
         self.cancellation_token = True
         self.abort_playback_event.set()
-        self._stop_tts_output_stream()
+        
+        # Обновляем произнесенные слова прямо в момент прерывания (высокая точность)
+        if getattr(self, '_current_playback_start_time', None) is not None:
+            elapsed_ms = (time.perf_counter() - self._current_playback_start_time) * 1000.0
+            with self._spoken_words_lock:
+                while self._current_word_index < len(self._current_word_timings) and elapsed_ms >= self._current_word_timings[self._current_word_index]["start_ms"]:
+                    self._spoken_words.append(self._current_word_timings[self._current_word_index]["word"])
+                    self._current_word_index += 1
+                self.current_ai_text_spoken = " ".join(self._spoken_words)
+                
+        # self._stop_tts_output_stream() # Убрано: вызов abort() из другого потока крашит PortAudio
         with self.tts_sentence_queue.mutex:
             self.tts_sentence_queue.queue.clear()
 
         # Фиксируем только реально озвученный текст, если assistant-сообщение уже создано.
         if self.last_ai_message_id:
             spoken = self.current_ai_text_spoken.strip()
+            self.history_manager.truncate_message(self.last_ai_message_id, spoken)
             self.history_manager.update_message(
                 self.last_ai_message_id,
-                text=spoken,
-                spoken_text=spoken,
-                interrupted=True,
-                finish_reason="cancelled",
-                interrupt_source=source,
+                finish_reason="cancelled"
             )
 
         return True
@@ -597,14 +626,119 @@ class AriumEngine:
         """Поток прослушивания микрофона."""
         if self.ptt_mode and self.keyboard_module:
             self._stt_worker_buffered_ptt()
-            return
+        else:
+            self._stt_worker_live_vad()
 
-        logger.info("🎤 Слушаю...")
-        for text in self.stt.stream():
-            if not self.running:
+    def _process_result_queue(self, result_queue: queue.Queue):
+        while True:
+            try:
+                result_type, payload = result_queue.get_nowait()
+                if result_type == 'error':
+                    logger.error(f"Ошибка транскрибации: {payload}")
+                else:
+                    self._handle_recognized_text(str(payload))
+            except queue.Empty:
                 break
-                
-            self._handle_recognized_text(text)
+
+    def _stt_worker_live_vad(self):
+        """Режим Continuous STT (Live VAD)."""
+        logger.info("🎤 Слушаю (Live VAD mode)...")
+        
+        chunk_size = 512
+        vad_threshold_start = float(self.settings.get('controls.vad_threshold_start', 0.5))
+        vad_threshold_end = float(self.settings.get('controls.vad_threshold_end', 0.3))
+        endpoint_silence_sec = float(self.settings.get('controls.vad_endpointing_seconds', 1.0))
+        max_silence_chunks = int(endpoint_silence_sec * self.ptt_sample_rate / chunk_size)
+        min_audio_sec = 0.5
+        
+        audio_queue = queue.Queue()
+        
+        def audio_callback(indata, frames, time_info, status):
+            if status:
+                logger.debug(f"[VAD] Audio status: {status}")
+            audio_queue.put(indata.copy())
+            
+        segment_queue = queue.Queue(maxsize=10)
+        result_queue = queue.Queue(maxsize=10)
+        stop_transcriber = threading.Event()
+        
+        transcriber = threading.Thread(
+            target=self._transcriber_worker,
+            args=(segment_queue, result_queue, stop_transcriber),
+            daemon=True,
+            name="VAD_Transcriber",
+        )
+        transcriber.start()
+
+        is_recording = False
+        audio_buffer = []
+        silence_chunks = 0
+
+        try:
+            with sd.InputStream(
+                samplerate=self.ptt_sample_rate,
+                channels=1,
+                dtype='float32',
+                blocksize=chunk_size,
+                callback=audio_callback
+            ):
+                while self.running:
+                    try:
+                        chunk = audio_queue.get(timeout=0.1)
+                    except queue.Empty:
+                        self._process_result_queue(result_queue)
+                        continue
+                    
+                    import torch
+                    audio_tensor = torch.from_numpy(chunk.squeeze()).unsqueeze(0).to(self.device)
+                    with torch.no_grad():
+                        prob = self.vad_model(audio_tensor, self.ptt_sample_rate).item()
+
+                    if prob > vad_threshold_start:
+                        if not is_recording:
+                            is_recording = True
+                            audio_buffer = [chunk]
+                            silence_chunks = 0
+                            logger.debug("[VAD] Речь началась")
+                            
+                            # --- BARGE-IN (Прерывание ИИ) ---
+                            if self.is_speaking or not self.tts_sentence_queue.empty():
+                                logger.info("🛑 VAD перебивание (Barge-in): прерываю ИИ")
+                                self._interrupt_ai_output(source="voice_interrupt")
+                        else:
+                            audio_buffer.append(chunk)
+                            silence_chunks = 0
+                    elif is_recording:
+                        audio_buffer.append(chunk)
+                        if prob < vad_threshold_end:
+                            silence_chunks += 1
+                            
+                        if silence_chunks >= max_silence_chunks:
+                            is_recording = False
+                            logger.debug("[VAD] Речь закончилась (Endpointing)")
+                            
+                            audio_data = np.concatenate(audio_buffer, axis=0).squeeze()
+                            audio_buffer = []
+                            duration = len(audio_data) / self.ptt_sample_rate
+                            if duration >= min_audio_sec:
+                                try:
+                                    segment_queue.put_nowait(audio_data)
+                                except queue.Full:
+                                    logger.warning("[VAD] Очередь переполнена, пропускаем")
+                            else:
+                                logger.debug(f"[VAD] Слишком короткая фраза ({duration:.1f}с), игнорируем")
+                                
+                    self._process_result_queue(result_queue)
+
+        except Exception as e:
+            logger.error(f"Ошибка Live VAD режима: {e}", exc_info=True)
+        finally:
+            stop_transcriber.set()
+            try:
+                segment_queue.put_nowait(None)
+            except queue.Full:
+                pass
+            transcriber.join(timeout=1.0)
 
     def _tts_worker(self):
         """Поток проигрывания аудио."""
@@ -647,8 +781,12 @@ class AriumEngine:
                 if hasattr(self.tts, 'stream_audio'):
                     out = _get_audio_stream(self.tts.sample_rate)
                     words = normalize_words(sentence)
-                    word_timings = compute_word_timings_from_weight(words, self._tts_ms_per_weight)
-                    next_word_index = 0
+                    
+                    with self._spoken_words_lock:
+                        self._current_word_timings = compute_word_timings_from_weight(words, self._tts_ms_per_weight)
+                        self._current_word_index = 0
+                        self._current_playback_start_time = None
+                    
                     total_samples = 0
                     total_weight = sum(max(len(word), 1) for word in words)
 
@@ -657,23 +795,33 @@ class AriumEngine:
                             break
                         if chunk is None:
                             continue
-                        out.write(chunk)
+                        
+                        if self._current_playback_start_time is None:
+                            self._current_playback_start_time = time.perf_counter()
+                            
+                        try:
+                            out.write(chunk)
+                        except Exception:
+                            # Stream was aborted
+                            pass
 
                         if words:
                             chunk_arr = np.asarray(chunk, dtype=np.float32)
                             if chunk_arr.ndim > 1:
                                 chunk_arr = chunk_arr.reshape(-1)
                             total_samples += chunk_arr.size
-                            elapsed_ms = (total_samples / self.tts.sample_rate) * 1000.0
+                            
+                            elapsed_ms = (time.perf_counter() - self._current_playback_start_time) * 1000.0
 
-                            while next_word_index < len(word_timings) and elapsed_ms >= word_timings[next_word_index]["start_ms"]:
-                                self._append_spoken_words([word_timings[next_word_index]["word"]])
-                                next_word_index += 1
+                            with self._spoken_words_lock:
+                                while self._current_word_index < len(self._current_word_timings) and elapsed_ms >= self._current_word_timings[self._current_word_index]["start_ms"]:
+                                    self._append_spoken_words([self._current_word_timings[self._current_word_index]["word"]])
+                                    self._current_word_index += 1
 
                     sentence_completed = not self.abort_playback_event.is_set()
                     if sentence_completed and words:
-                        if next_word_index < len(words):
-                            self._append_spoken_words(words[next_word_index:])
+                        if self._current_word_index < len(words):
+                            self._append_spoken_words(words[self._current_word_index:])
                         if total_samples > 0 and total_weight > 0:
                             duration_ms = int(round((total_samples / self.tts.sample_rate) * 1000.0))
                             self._update_ms_per_weight(duration_ms, total_weight)
@@ -799,7 +947,7 @@ class AriumEngine:
         if single_tts_tool_mode:
             tools_definitions = None
         elif self.tools_definitions:
-            tool_choice = "required" if self.tool_only_voice_output else "auto"
+            tool_choice = "auto" # Используем auto вместо required, чтобы избежать ошибок API на некоторых моделях
 
         stream = self.llm.send_message_stream(
             messages=messages,
@@ -842,6 +990,12 @@ class AriumEngine:
                             "result": tool_result,
                             "success": chunk.get("success", False),
                         })
+                    self.history_manager.append_message(
+                        "tool",
+                        str(tool_result.get("text_requested", "")),
+                        tool_call_id=tool_call_id,
+                        name="text_to_audio",
+                    )
                     tool_events_count += 1
                     continue
 
@@ -861,7 +1015,7 @@ class AriumEngine:
 
                 tool_calls = chunk.get("tool_calls")
                 if isinstance(tool_calls, list) and tool_calls:
-                    self.history_manager.append_message(
+                    self.last_ai_message_id = self.history_manager.append_message(
                         "assistant",
                         None,
                         tool_calls=tool_calls,
@@ -899,7 +1053,7 @@ class AriumEngine:
             }
 
             # Каноничная пара assistant(tool_calls) -> tool(tool_call_id)
-            self.history_manager.append_message(
+            self.last_ai_message_id = self.history_manager.append_message(
                 "assistant",
                 None,
                 tool_calls=[local_tool_call],
@@ -908,7 +1062,7 @@ class AriumEngine:
             tool_result = self._tool_text_to_audio(error_public_text)
             self.history_manager.append_message(
                 "tool",
-                json.dumps(tool_result, ensure_ascii=False),
+                error_public_text,
                 tool_call_id=local_tool_call_id,
                 name="text_to_audio",
             )
@@ -916,7 +1070,10 @@ class AriumEngine:
             raw_assistant_text = ""
 
         if single_tts_tool_mode and raw_assistant_text.strip() and tool_events_count == 0:
-            local_text = raw_assistant_text.strip()
+            from app.tools.text_processing import extract_clean_text
+            local_text = extract_clean_text(raw_assistant_text.strip())
+            if not local_text:
+                local_text = raw_assistant_text.strip()
             local_tool_call_id = f"local_tts_{int(time.time() * 1000)}"
             local_tool_call = {
                 "id": local_tool_call_id,
@@ -928,7 +1085,7 @@ class AriumEngine:
             }
 
             # Каноничная пара assistant(tool_calls) -> tool(tool_call_id)
-            self.history_manager.append_message(
+            self.last_ai_message_id = self.history_manager.append_message(
                 "assistant",
                 None,
                 tool_calls=[local_tool_call],
@@ -937,58 +1094,32 @@ class AriumEngine:
             tool_result = self._tool_text_to_audio(local_text)
             self.history_manager.append_message(
                 "tool",
-                json.dumps(tool_result, ensure_ascii=False),
+                local_text,
                 tool_call_id=local_tool_call_id,
                 name="text_to_audio",
             )
             tool_events_count += 1
 
-        # В strict tool-only режиме итог ассистента формируется только из реально озвученного текста.
+        # В strict tool-only режиме итог ассистента формируется только из реально сгенерированного текста
         self._wait_for_tts_completion(timeout=30.0)
-        spoken_text = self.current_ai_text_spoken.strip()
         self.current_reasoning_content = reasoning_buffer
 
-        if self.tool_only_voice_output:
-            assistant_content = spoken_text
-            if not assistant_content and raw_assistant_text.strip():
-                # Fallback на случай, если модель нарушила контракт и не вызвала text_to_audio.
-                logger.warning("[LLM] Нет озвученного текста в strict-режиме, сохраняем raw assistant text как fallback")
-                assistant_content = raw_assistant_text.strip()
-        else:
-            assistant_content = spoken_text or raw_assistant_text.strip()
+        assistant_content = raw_assistant_text.strip()
 
         if finish_reason is None:
             finish_reason = "cancelled" if self.cancellation_token else "stop"
 
-        with self._turn_state_lock:
-            tool_snapshot = list(self.current_turn_tool_results)
-
-        # Всегда фиксируем assistant-ход, даже если ответ пустой/прерванный.
-        self.last_ai_message_id = self.history_manager.append_message(
-            "assistant",
-            assistant_content,
-            spoken_text=spoken_text,
-            reasoning_content=reasoning_buffer,
-            finish_reason=finish_reason,
-            model=self.settings.get_model_id_for_model(),
-            tool_results=tool_snapshot,
-            interrupted=bool(self.cancellation_token or self.abort_playback_event.is_set()),
-            tool_events_count=tool_events_count,
-        )
-
-        with self._turn_state_lock:
-            tts_tool_results = list(self._turn_tts_tool_results)
-
-        if tts_tool_results:
-            batch_id = f"tts_batch_{int(time.time() * 1000)}"
-            batch_payload = {
-                "tool": "text_to_audio",
-                "count": len(tts_tool_results),
-                "items": tts_tool_results,
-            }
-            self.history_manager.append_message(
-                "tool",
-                json.dumps(batch_payload, ensure_ascii=False),
-                tool_call_id=batch_id,
-                name="text_to_audio",
+        # Всегда фиксируем assistant-ход, убираем нестандартные поля.
+        if self.last_ai_message_id:
+            self.history_manager.update_message(
+                self.last_ai_message_id,
+                text=assistant_content,
+                reasoning_content=reasoning_buffer,
+                finish_reason=finish_reason,
+            )
+        else:
+            self.last_ai_message_id = self.history_manager.append_message(
+                "assistant",
+                assistant_content,
+                reasoning_content=reasoning_buffer,
             )

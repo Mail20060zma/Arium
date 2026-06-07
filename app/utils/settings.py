@@ -46,6 +46,7 @@ class Settings:
             "tts_xtts_model": "v2.0.2",
             "tts_xtts_speaker": "",
             "tts_streaming": True,
+            "system_device": "cuda" if __import__("torch").cuda.is_available() else "cpu",
 
             "llm": {
                 "tool_only_voice_output": True,
@@ -56,7 +57,7 @@ class Settings:
             # === AI Engine v2 ===
             "memory": {
                 "context_window_size": 25,
-                "history_file": "chat_history.json",
+                "history_file": "app/data/chat_history.json",
                 "include_reasoning_in_context": True,
                 "reasoning_max_chars": 4000
             },
