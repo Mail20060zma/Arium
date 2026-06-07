@@ -1069,7 +1069,9 @@ class AriumEngine:
             tool_events_count += 1
             raw_assistant_text = ""
 
-        if single_tts_tool_mode and raw_assistant_text.strip() and tool_events_count == 0:
+        # Fallback: Если модель (особенно локальная) не смогла вызвать инструмент
+        # и ответила обычным текстом, принудительно озвучиваем её ответ.
+        if self.tool_only_voice_output and raw_assistant_text.strip() and tool_events_count == 0:
             from app.tools.text_processing import extract_clean_text
             local_text = extract_clean_text(raw_assistant_text.strip())
             if not local_text:

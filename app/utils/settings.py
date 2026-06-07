@@ -28,14 +28,6 @@ class Settings:
         """Возвращает структуру дефолтных настроек."""
         return {
             "model": {
-                "qwen2.5-coder-7b": {
-                    "model": "qwen2.5-coder:7b",
-                    "api_key": "",
-                    "provider": "ollama",
-                    "model_id": "qwen2.5-coder-7b",
-                    "model_name": "Qwen2.5-Coder 7B",
-                    "base_url": "http://localhost:11434/v1"
-                }
             },
             "current_model": "qwen2.5-coder-7b",
             "stt_provider": "whisper",

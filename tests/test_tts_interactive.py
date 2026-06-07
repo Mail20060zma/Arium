@@ -33,13 +33,14 @@ def play_audio(tts, text):
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
+
 def main():
-    default_device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    default_device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     print(f"--- Тестирование TTS ---")
     print(f"Доступное устройство по умолчанию: {default_device}")
     
-    device_choice = 'cuda' #input(f"Введите устройство (cuda/cpu) [По умолчанию: {default_device}]: ").strip().lower()
-    device = device_choice if device_choice in ['cuda', 'cpu'] else default_device
+    device_choice = 'cuda:1' #input(f"Введите устройство (cuda/cpu) [По умолчанию: {default_device}]: ").strip().lower()
+    device = device_choice if device_choice in ['cuda:0', 'cuda:1', 'cpu'] else default_device
     print(f"Используемое устройство: {device}")
     
     # Инициализация бэкендов по выбору
