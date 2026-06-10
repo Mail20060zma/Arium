@@ -24,7 +24,7 @@ MIN_AUDIO_SEC = 0.5 # Минимальная длина аудио для тра
 
 class LiveSTT:
     def __init__(self, backend="whisper", model_name="small"):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = "cuda:1" if torch.cuda.is_available() else "cpu"
         print(f"[Init] Загрузка VAD (Silero) на {self.device}...")
         
         # Загружаем Silero VAD

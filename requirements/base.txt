@@ -24,3 +24,8 @@ pygame==2.5.3
 sounddevice==0.5.1
 pipwin==0.5.2
 numpy==2.2.6
+
+# Screen Control
+mss>=9.0.0
+Pillow>=10.0.0
+pyautogui>=0.9.54

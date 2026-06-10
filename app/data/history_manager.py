@@ -3,6 +3,8 @@ import logging
 import threading
 import queue
 import time
+import base64
+import mimetypes
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from uuid import uuid4
@@ -321,11 +323,60 @@ class HistoryManager:
                         skipped_tool_call_ids.discard(str(tool_call_id))
                         continue
                         
-                    tool_msg = {
-                        "role": "tool",
-                        "tool_call_id": str(tool_call_id) if tool_call_id else "",
-                        "content": m.get("content") or ""
-                    }
+                    content_val = m.get("content") or ""
+                    
+                    # Парсинг JSON-контента инструмента в поисках image_path(s)
+                    parsed_content = None
+                    try:
+                        if isinstance(content_val, str) and content_val.strip().startswith("{"):
+                            parsed_content = json.loads(content_val)
+                    except:
+                        pass
+                        
+                    if isinstance(parsed_content, dict) and ("image_path" in parsed_content or "image_paths" in parsed_content):
+                        new_content = []
+                        text_repr = parsed_content.copy()
+                        image_paths = []
+                        
+                        if "image_path" in text_repr:
+                            image_paths.append(text_repr.pop("image_path"))
+                        if "image_paths" in text_repr:
+                            image_paths.extend(text_repr.pop("image_paths"))
+                            
+                        new_content.append({
+                            "type": "text",
+                            "text": json.dumps(text_repr, ensure_ascii=False)
+                        })
+                        
+                        for ipath in image_paths:
+                            p = Path(ipath)
+                            if p.exists() and p.is_file():
+                                try:
+                                    mime_type, _ = mimetypes.guess_type(p.name)
+                                    if not mime_type:
+                                        mime_type = "image/jpeg"
+                                    with open(p, "rb") as f:
+                                        b64_encoded = base64.b64encode(f.read()).decode("utf-8")
+                                    new_content.append({
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": f"data:{mime_type};base64,{b64_encoded}"
+                                        }
+                                    })
+                                except Exception as e:
+                                    logger.warning(f"Failed to load image {ipath}: {e}")
+                                    
+                        tool_msg = {
+                            "role": "tool",
+                            "tool_call_id": str(tool_call_id) if tool_call_id else "",
+                            "content": new_content if len(new_content) > 1 else content_val
+                        }
+                    else:
+                        tool_msg = {
+                            "role": "tool",
+                            "tool_call_id": str(tool_call_id) if tool_call_id else "",
+                            "content": content_val
+                        }
                     if tool_name:
                         tool_msg["name"] = str(tool_name)
                         

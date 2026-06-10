@@ -7,6 +7,7 @@ from app.tools.audio import TOOL_HANDLERS as AUDIO_TOOL_HANDLERS
 from app.tools.weather import get_weather
 from app.tools.search import search_web
 from app.data.vector_memory import vector_memory
+from app.tools.screen_control import screen_view, screen_zoom, screen_click, screen_type
 
 
 def _not_implemented_tool(tool_name: str) -> Dict[str, str]:
@@ -77,6 +78,10 @@ def get_tool_handlers(
 		"memory_search": _memory_search_handler,
 		"memory_delete": _memory_delete_handler,
 		"memory_list": _memory_list_handler,
+		"screen_view": screen_view,
+		"screen_zoom": screen_zoom,
+		"screen_click": screen_click,
+		"screen_type": screen_type,
 	}
 
 	# По умолчанию используем реализацию из audio.py, но core может подменить своим хендлером.
