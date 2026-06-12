@@ -47,6 +47,34 @@ class UniversalOpenAIHandler(BaseLLMHandler):
             "generation_speed_tps": 0.0
         }
         
+    def _format_messages_for_local_llm(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        formatted = []
+        for msg in messages:
+            role = msg.get("role")
+            content = msg.get("content")
+            tool_calls = msg.get("tool_calls")
+            
+            if role == "tool":
+                formatted.append({
+                    "role": "user",
+                    "content": f"[Результат выполнения {msg.get('name') or 'инструмента'}]: {content}"
+                })
+            elif role == "assistant" and tool_calls:
+                calls_str = []
+                for tc in tool_calls:
+                    fn = tc.get("function", {})
+                    calls_str.append(f"Вызов инструмента {fn.get('name')}({fn.get('arguments')})")
+                text_content = content or ""
+                if calls_str:
+                    text_content += "\n" + "\n".join(calls_str)
+                formatted.append({
+                    "role": "assistant",
+                    "content": text_content.strip()
+                })
+            else:
+                formatted.append(msg)
+        return formatted
+
     def _count_tokens(self, text: str) -> int:
         if not self.encoding or not text:
             return 0
@@ -232,6 +260,11 @@ class UniversalOpenAIHandler(BaseLLMHandler):
         Если ответ требует вызов функции - делает вызов, рекурсивно обращается к API, и стримит финальный результат.
         В случае прерывания стрима по cancellation_token возвращает yield {"finish_reason": "cancelled"}.
         """
+        # Check if local provider to translate tool calls/results to plain text for stability
+        is_local = any(x in (self.base_url or "").lower() for x in ["localhost", "127.0.0.1", "ollama", "lm_studio"])
+        if is_local:
+            messages = self._format_messages_for_local_llm(messages)
+
         if max_depth <= 0:
             logger.warning("Достигнут предел рекурсии (max_depth).")
             yield {"content": "\n[Превышен лимит вызовов инструментов]", "finish_reason": "length"}

@@ -11,6 +11,34 @@ from app.utils.settings import Settings
 from app.tools.instructions import build_tools_use
 from app.LLM.universal_openai import UniversalOpenAIHandler
 
+def format_messages_for_local_llm(messages):
+    formatted = []
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content")
+        tool_calls = msg.get("tool_calls")
+        
+        if role == "tool":
+            formatted.append({
+                "role": "user",
+                "content": f"[Результат выполнения {msg.get('name') or 'инструмента'}]: {content}"
+            })
+        elif role == "assistant" and tool_calls:
+            calls_str = []
+            for tc in tool_calls:
+                fn = tc.get("function", {})
+                calls_str.append(f"Вызов инструмента {fn.get('name')}({fn.get('arguments')})")
+            text_content = content or ""
+            if calls_str:
+                text_content += "\n" + "\n".join(calls_str)
+            formatted.append({
+                "role": "assistant",
+                "content": text_content.strip()
+            })
+        else:
+            formatted.append(msg)
+    return formatted
+
 def test_tool_loop():
     print("Testing tool loop history response...")
     
@@ -78,7 +106,9 @@ def test_tool_loop():
     try:
         # Pass the real tool definitions
         tools_definitions = build_tools_use(settings.get("llm.enabled_tools", []))
-        stream = llm.send_message_stream(messages, tools_definitions=tools_definitions)
+        formatted_messages = format_messages_for_local_llm(messages)
+        print("Formatted messages:", json.dumps(formatted_messages, indent=2, ensure_ascii=False))
+        stream = llm.send_message_stream(formatted_messages, tools_definitions=tools_definitions)
         
         has_content = False
         for chunk in stream:
