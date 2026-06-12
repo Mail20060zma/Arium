@@ -15,6 +15,7 @@ class ScreenManager:
         self.current_zoom_region: Optional[Dict[str, int]] = None
         self.cell_mapping: Dict[int, Dict[str, int]] = {}
         self.last_image_path: Optional[str] = None
+        self.ui_callback: Optional[Callable] = None
         
         # Настройки сетки
         self.global_cells_x = 20
@@ -90,6 +91,8 @@ class ScreenManager:
         
         # Перебираем все мониторы (индексы с 1)
         for i, monitor in enumerate(self.sct.monitors[1:], start=1):
+            if self.ui_callback:
+                self.ui_callback("screenshot", monitor_index=i)
             sct_img = self.sct.grab(monitor)
             img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
             
@@ -152,6 +155,26 @@ class ScreenManager:
         z_w = min(monitor["width"] - z_x, int(width + 2 * margin_x))
         z_h = min(monitor["height"] - z_y, int(height + 2 * margin_y))
         
+        if self.ui_callback:
+            cells_data = []
+            for c in valid_cells:
+                cell_info = self.cell_mapping[c]
+                cells_data.append({
+                    "x": cell_info["x"],
+                    "y": cell_info["y"],
+                    "w": cell_info["w"],
+                    "h": cell_info["h"],
+                    "label": f"{c}"
+                })
+            self.ui_callback("zoom_preview", monitor_index=target_monitor_idx, region={
+                "x": z_x,
+                "y": z_y,
+                "w": z_w,
+                "h": z_h
+            }, cells_data=cells_data)
+            # brief pause to allow visual representation to play
+            time.sleep(0.3)
+            
         # Глобальные координаты для mss
         bbox = {"top": int(z_y + monitor["top"]), "left": int(z_x + monitor["left"]), "width": int(z_w), "height": int(z_h)}
         sct_img = self.sct.grab(bbox)
@@ -205,6 +228,10 @@ class ScreenManager:
         else:
             global_x = monitor["left"] + cx
             global_y = monitor["top"] + cy
+            
+        if self.ui_callback:
+            self.ui_callback("click", x=global_x, y=global_y)
+            time.sleep(0.3)
             
         pyautogui.click(global_x, global_y)
         

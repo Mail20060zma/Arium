@@ -69,6 +69,9 @@ class AriumEngine:
         self._tts_stream_lock = threading.Lock()
         self._tts_stream_out: Optional[sd.OutputStream] = None
         
+        self.ui_queue = None
+        self.ui_thread = None
+        
         self._init_components()
 
     def _init_components(self):
@@ -198,6 +201,21 @@ class AriumEngine:
             except ImportError:
                 logger.warning("Модуль keyboard не установлен. Возврат к голосовой активации.")
                 self.ptt_mode = False
+
+        # Инициализация UI
+        if bool(self.settings.get('ui.enabled', True)):
+            logger.info("🔧 Инициализация UI Overlay...")
+            self.ui_queue = queue.Queue()
+            
+            # Регистрируем коллбэк для скриншотов, кликов и зума
+            from app.tools.screen_control import screen_manager
+            screen_manager.ui_callback = self.ui_notify
+
+    def ui_notify(self, event_type: str, **kwargs):
+        if self.ui_queue is not None:
+            event = {"type": event_type}
+            event.update(kwargs)
+            self.ui_queue.put(event)
 
     def _cancellation_callback(self) -> bool:
         """Метод для передачи в LLM, определяющий нужно ли прервать стрим."""
@@ -516,6 +534,7 @@ class AriumEngine:
                     with state_lock:
                         if ptt_pressed and capture_state == 'idle':
                             capture_state = 'recording'
+                            self.ui_notify("state", state="listening")
                             active_chunks = list(ring_buffer)[-pre_roll_count:]
                             post_deadline = 0.0
                             logger.debug(f"[PTT] Старт сегмента, pre-roll чанков: {len(active_chunks)}")
@@ -583,12 +602,23 @@ class AriumEngine:
         threading.Thread(target=self._tts_worker, daemon=True, name="TTS_Thread").start()
         
         logger.info("🚀 Arium Engine успешно запущен!")
-        try:
-            while self.running:
-                time.sleep(0.5)
-        except KeyboardInterrupt:
-            logger.info("Остановка Arium Engine...")
-            self.stop()
+        
+        if self.ui_queue is not None:
+            logger.debug("Запуск UI Overlay в главном потоке...")
+            from app.ui.overlay import launch_overlay
+            try:
+                launch_overlay(self.ui_queue)
+            except KeyboardInterrupt:
+                logger.info("Остановка Arium Engine из UI...")
+            finally:
+                self.stop()
+        else:
+            try:
+                while self.running:
+                    time.sleep(0.5)
+            except KeyboardInterrupt:
+                logger.info("Остановка Arium Engine...")
+                self.stop()
 
     def stop(self):
         """Плавная остановка."""
@@ -600,6 +630,9 @@ class AriumEngine:
             self._ai_worker_thread.join(timeout=2.0)
         self.history_manager.stop_worker()
         self.dispatcher.cancel()
+        
+        if self.ui_queue is not None:
+            self.ui_queue.put({"type": "close"})
 
     # ================= WORKERS =================
 
@@ -697,6 +730,7 @@ class AriumEngine:
                     if prob > vad_threshold_start:
                         if not is_recording:
                             is_recording = True
+                            self.ui_notify("state", state="listening")
                             audio_buffer = [chunk]
                             silence_chunks = 0
                             logger.debug("[VAD] Речь началась")
@@ -774,6 +808,7 @@ class AriumEngine:
                 continue
                 
             self.is_speaking = True
+            self.ui_notify("state", state="speaking", text=sentence)
             logger.info(f"🔊 Начинаем синтез: {sentence}")
             sentence_completed = False
             
@@ -854,11 +889,13 @@ class AriumEngine:
                 # Очистка очереди (выкидываем оставшиеся предложения)
                 with self.tts_sentence_queue.mutex:
                     self.tts_sentence_queue.queue.clear()
+                self.ui_notify("state", state="idle")
             
             # Проверяем не закончилась ли очередь (тогда выключаем флаг)
             if self.tts_sentence_queue.empty():
                 logger.debug("[TTS] Очередь предложений пуста, флаг is_speaking снят.")
                 self.is_speaking = False
+                self.ui_notify("state", state="idle")
 
     # ================= LOGIC =================
 
@@ -880,6 +917,7 @@ class AriumEngine:
         """Работа с Universal LLM и стримингом (strict tool-first voice)."""
         # Подготовка состояния хода (делаем только в одном AI-воркере, поэтому гонок нет).
         logger.debug("[AI] Старт новой генерации, сброс turn-state")
+        self.ui_notify("state", state="thinking")
         self.cancellation_token = False
         self.abort_playback_event.clear()
         self._reset_spoken_words_state()
@@ -1015,6 +1053,9 @@ class AriumEngine:
 
                 tool_calls = chunk.get("tool_calls")
                 if isinstance(tool_calls, list) and tool_calls:
+                    non_tts_tools = [tc["function"]["name"] for tc in tool_calls if tc["function"]["name"] != "text_to_audio"]
+                    if non_tts_tools:
+                        self.ui_notify("state", state="acting", text=f"Вызов: {', '.join(non_tts_tools)}")
                     self.last_ai_message_id = self.history_manager.append_message(
                         "assistant",
                         None,
@@ -1069,9 +1110,8 @@ class AriumEngine:
             tool_events_count += 1
             raw_assistant_text = ""
 
-        # Fallback: Если модель (особенно локальная) не смогла вызвать инструмент
-        # и ответила обычным текстом, принудительно озвучиваем её ответ.
-        if self.tool_only_voice_output and raw_assistant_text.strip() and tool_events_count == 0:
+        has_voiced = len(self._turn_tts_tool_results) > 0
+        if self.tool_only_voice_output and raw_assistant_text.strip() and not has_voiced:
             from app.tools.text_processing import extract_clean_text
             local_text = extract_clean_text(raw_assistant_text.strip())
             if not local_text:
