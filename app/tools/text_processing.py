@@ -236,18 +236,85 @@ def prepare_messages_for_api(messages: List[Dict[str, Any]],
     return api_messages
 
 
+def _extract_text_from_dict(data: dict) -> str:
+    """Вспомогательный метод для извлечения текста из распарсенного словаря инструмента"""
+    import json
+    # Ищем стандартные поля текста
+    for key in ["text", "text_requested", "text_spoken", "content", "arguments"]:
+        val = data.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+        if isinstance(val, dict):
+            # Рекурсивно ищем в arguments / parameters
+            res = _extract_text_from_dict(val)
+            if res:
+                return res
+                
+    # Ищем в параметрах
+    params = data.get("parameters")
+    if isinstance(params, dict):
+        res = _extract_text_from_dict(params)
+        if res:
+            return res
+            
+    # Ищем в arguments (если они переданы строкой JSON внутри JSON)
+    args = data.get("arguments")
+    if isinstance(args, str):
+        try:
+            inner_data = json.loads(args)
+            if isinstance(inner_data, dict):
+                res = _extract_text_from_dict(inner_data)
+                if res:
+                    return res
+        except Exception:
+            pass
+            
+    return ""
+
+
 def extract_clean_text(text: str) -> str:
-    """Очищает текст от служебных тегов локальных tool call-ов."""
+    """Очищает текст от любых служебных JSON/XML тегов или форматов вызова инструментов.
+    Возвращает только чистый текст, предназначенный для озвучивания.
+    """
+    import json
     if not text:
         return ""
-    
+        
     cleaned = text.strip()
     
-    # 1. Удаляем префикс <|tool_call>call:text_to_audio{text:<|...
-    # Например: <|tool_call>call:text_to_audio{text:<|"|> или <|tool_call>call:text_to_audio{text:<|\"|>
-    cleaned = re.sub(r'^<\|tool_call\|?>\s*call:text_to_audio\s*\{\s*text\s*:\s*<\|[\\\"\'\s\|><]*', '', cleaned, flags=re.IGNORECASE)
+    # 1. Если вся строка представляет собой JSON-объект
+    if cleaned.startswith("{") and cleaned.endswith("}"):
+        try:
+            data = json.loads(cleaned)
+            txt = _extract_text_from_dict(data)
+            if txt:
+                return txt
+        except Exception:
+            pass
+            
+    # 2. Если вся строка обернута в один XML-тег (например <tool_call>...</tool_call>)
+    for tag in ["tool_call", "tool_calls", "tool", "call"]:
+        tag_match = re.match(rf'^<{tag}[^>]*>\s*(.*?)\s*</{tag}>$', cleaned, re.DOTALL | re.IGNORECASE)
+        if tag_match:
+            inner_content = tag_match.group(1).strip()
+            res = extract_clean_text(inner_content)
+            if res:
+                return res
+
+    # 3. Если это смешанный текст: вырезаем XML-теги и код-блоки, оставляя обычный текст
+    # Вырезаем ```json ... ``` и любые другие блоки кода
+    cleaned = re.sub(r'```.*?```', '', cleaned, flags=re.DOTALL)
     
-    # 2. Удаляем постфикс ... |>}<tool_call|>
+    # Вырезаем <tool_call>...</tool_call> и другие подобные теги полностью
+    for tag in ["tool_call", "tool_calls", "tool", "call"]:
+        cleaned = re.sub(rf'<{tag}[^>]*>.*?</{tag}>', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
+        
+    # Вырезаем одиночные XML-теги
+    cleaned = re.sub(r'<[^>]+>', '', cleaned)
+    
+    # Применяем оригинальную очистку для <|tool_call|> префиксов/постфиксов
+    cleaned = re.sub(r'^<\|tool_call\|?>\s*call:text_to_audio\s*\{\s*text\s*:\s*<\|[\\\"\'\s\|><]*', '', cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r'[\\\"\'\s\|><]*\s*\}\s*<tool_call\|?>$', '', cleaned, flags=re.IGNORECASE)
     
     return cleaned.strip()
+

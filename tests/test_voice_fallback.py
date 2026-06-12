@@ -151,5 +151,30 @@ def test_voice_fallback():
         engine._tool_text_to_audio.assert_called_with("Стивен Хокинг родился в 1942 году.")
         print("CASE 2 passed successfully!")
 
+        # Reset mocks
+        engine._tool_text_to_audio.reset_mock()
+        engine.history_manager.reset_mock()
+        engine.history_manager.append_message.side_effect = append_msg
+
+        # --- CASE 3: Model returns a JSON tool call block in raw text ---
+        print("\n--- CASE 3: Model returns JSON tool call in raw text ---")
+        engine._turn_tts_tool_results = []
+        engine.last_ai_message_id = None
+        
+        # Mock the stream output returning JSON text containing a tool call
+        engine.llm.send_message_stream.return_value = [
+            {"type": "content_delta", "content": '{"tool_name": "text_to_audio", "parameters": {"text": "Привет! Конечно, запомнил. Пользователя зовут Михаил."}}'},
+            {"type": "status", "finish_reason": "stop"}
+        ]
+        
+        # Run response generation
+        engine._generate_ai_response()
+        
+        # Assertions for Case 3
+        # 1. _tool_text_to_audio should be called with only the extracted text
+        engine._tool_text_to_audio.assert_called_with("Привет! Конечно, запомнил. Пользователя зовут Михаил.")
+        print("CASE 3 passed successfully!")
+
 if __name__ == "__main__":
     test_voice_fallback()
+
