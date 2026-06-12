@@ -23,18 +23,6 @@ def format_messages_for_local_llm(messages):
                 "role": "user",
                 "content": f"[Результат выполнения {msg.get('name') or 'инструмента'}]: {content}"
             })
-        elif role == "assistant" and tool_calls:
-            calls_str = []
-            for tc in tool_calls:
-                fn = tc.get("function", {})
-                calls_str.append(f"Вызов инструмента {fn.get('name')}({fn.get('arguments')})")
-            text_content = content or ""
-            if calls_str:
-                text_content += "\n" + "\n".join(calls_str)
-            formatted.append({
-                "role": "assistant",
-                "content": text_content.strip()
-            })
         else:
             formatted.append(msg)
     return formatted

@@ -52,24 +52,11 @@ class UniversalOpenAIHandler(BaseLLMHandler):
         for msg in messages:
             role = msg.get("role")
             content = msg.get("content")
-            tool_calls = msg.get("tool_calls")
             
             if role == "tool":
                 formatted.append({
                     "role": "user",
                     "content": f"[Результат выполнения {msg.get('name') or 'инструмента'}]: {content}"
-                })
-            elif role == "assistant" and tool_calls:
-                calls_str = []
-                for tc in tool_calls:
-                    fn = tc.get("function", {})
-                    calls_str.append(f"Вызов инструмента {fn.get('name')}({fn.get('arguments')})")
-                text_content = content or ""
-                if calls_str:
-                    text_content += "\n" + "\n".join(calls_str)
-                formatted.append({
-                    "role": "assistant",
-                    "content": text_content.strip()
                 })
             else:
                 formatted.append(msg)
