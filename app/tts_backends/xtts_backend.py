@@ -31,6 +31,8 @@ class XTTSBackend(BaseTTS):
         self.load_model()
         
     def load_model(self):
+        if self.model is not None:
+            return
         print("Loading XTTS model...")
         
         # Download if config.json doesn't exist

@@ -37,7 +37,7 @@ class HistoryManager:
         
     def _load_from_disk(self) -> None:
         """Загрузка истории из файла при старте."""
-        if self._filepath.exists():
+        if self._filepath.exists() and self._filepath.stat().st_size > 0:
             try:
                 with open(self._filepath, 'r', encoding='utf-8') as f:
                     data = json.load(f)

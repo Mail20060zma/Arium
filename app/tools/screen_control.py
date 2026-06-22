@@ -1,7 +1,9 @@
 import os
 import time
+import subprocess
+import base64
 from pathlib import Path
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Callable
 import pyautogui
 import mss
 from PIL import Image, ImageDraw, ImageFont
@@ -24,6 +26,597 @@ class ScreenManager:
         self.zoom_cells_y = 10
         
         pyautogui.FAILSAFE = False
+
+    def _run_ocr(self, image_path: str) -> List[Dict[str, Any]]:
+        """Запуск встроенного Windows OCR через PowerShell reflection."""
+        image_path = str(Path(image_path).resolve())
+        
+        ps_script = f"""
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime
+        
+        [void][Windows.Storage.StorageFile, Windows.Storage, ContentType=WindowsRuntime]
+        [void][Windows.Storage.FileAccessMode, Windows.Storage, ContentType=WindowsRuntime]
+        [void][Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType=WindowsRuntime]
+        [void][Windows.Media.Ocr.OcrEngine, Windows.Media.Ocr, ContentType=WindowsRuntime]
+        [void][Windows.Storage.Streams.IRandomAccessStream, Windows.Storage, ContentType=WindowsRuntime]
+
+        $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | 
+            Where-Object {{ 
+                $_.Name -eq 'AsTask' -and 
+                $_.GetParameters().Count -eq 1 -and 
+                $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' 
+            }})[0]
+
+        function Await-WinRT ($asyncOp, [Type]$resultType) {{
+            $concreteMethod = $asTaskGeneric.MakeGenericMethod($resultType)
+            $netTask = $concreteMethod.Invoke($null, @($asyncOp))
+            return $netTask.GetAwaiter().GetResult()
+        }}
+
+        try {{
+            $opFile = [Windows.Storage.StorageFile]::GetFileFromPathAsync("{image_path}")
+            $storageFile = Await-WinRT $opFile ([Windows.Storage.StorageFile])
+
+            $opStream = $storageFile.OpenAsync([Windows.Storage.FileAccessMode]::Read)
+            $stream = Await-WinRT $opStream ([Windows.Storage.Streams.IRandomAccessStream])
+
+            $opDec = [Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)
+            $decoder = Await-WinRT $opDec ([Windows.Graphics.Imaging.BitmapDecoder])
+            
+            $opBmp = $decoder.GetSoftwareBitmapAsync()
+            $bitmap = Await-WinRT $opBmp ([Windows.Graphics.Imaging.SoftwareBitmap])
+
+            $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+            if (-not $engine) {{
+                throw "Could not create OCR engine."
+            }}
+            
+            $opOcr = $engine.RecognizeAsync($bitmap)
+            $ocrResult = Await-WinRT $opOcr ([Windows.Media.Ocr.OcrResult])
+            
+            $results = @()
+            foreach ($line in $ocrResult.Lines) {{
+                foreach ($word in $line.Words) {{
+                    $rect = $word.BoundingRect
+                    $results += "$($word.Text)|$($rect.X)|$($rect.Y)|$($rect.Width)|$($rect.Height)"
+                }}
+            }}
+            $output_str = $results -join "`n"
+            $output_bytes = [System.Text.Encoding]::UTF8.GetBytes($output_str)
+            $base64 = [System.Convert]::ToBase64String($output_bytes)
+            Write-Output $base64
+        }} catch {{
+            $err_msg = $_.Exception.ToString()
+            $err_bytes = [System.Text.Encoding]::UTF8.GetBytes("ERROR: " + $err_msg)
+            Write-Output ([System.Convert]::ToBase64String($err_bytes))
+            exit 1
+        }}
+        """
+        try:
+            proc = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore"
+            )
+            stdout_clean = proc.stdout.strip()
+            if not stdout_clean:
+                return []
+                
+            decoded_bytes = base64.b64decode(stdout_clean)
+            decoded_str = decoded_bytes.decode("utf-8", errors="ignore")
+            
+            if decoded_str.startswith("ERROR:"):
+                return []
+                
+            words = []
+            for line in decoded_str.strip().split("\n"):
+                line = line.strip()
+                if not line or "|" not in line:
+                    continue
+                parts = line.split("|")
+                if len(parts) == 5:
+                    text, x, y, w, h = parts
+                    words.append({
+                        "text": text,
+                        "x": int(float(x)),
+                        "y": int(float(y)),
+                        "w": int(float(w)),
+                        "h": int(float(h))
+                    })
+            return words
+        except Exception:
+            return []
+
+
+    def open_app(self, app_name: str) -> Dict[str, Any]:
+        """Запускает приложение по имени или пути."""
+        import os
+        import subprocess
+        from pathlib import Path
+        
+        app_name_clean = app_name.strip()
+        if not app_name_clean:
+            return {"status": "error", "message": "Имя приложения не может быть пустым."}
+            
+        lower_name = app_name_clean.lower()
+        
+        # 1. Сначала проверим, не запущено ли уже это приложение (по заголовку окна)
+        try:
+            import uiautomation as auto
+            root = auto.GetRootControl()
+            matching_window = None
+            
+            # Определяем ключевые слова для поиска по заголовку
+            keywords = [lower_name]
+            if lower_name in ["yandexmusic", "яндекс музыка", "yandex music"]:
+                keywords = ["яндекс", "yandex", "music", "музыка"]
+            elif lower_name in ["telegram", "телеграм"]:
+                keywords = ["telegram", "телеграм"]
+            elif lower_name in ["chrome", "браузер", "google chrome"]:
+                keywords = ["chrome", "google chrome", "браузер"]
+            elif lower_name in ["notepad", "блокнот"]:
+                keywords = ["notepad", "блокнот"]
+            elif lower_name in ["calc", "калькулятор"]:
+                keywords = ["calc", "калькулятор"]
+            elif lower_name in ["explorer", "проводник"]:
+                keywords = ["проводник", "explorer"]
+                
+            for child in root.GetChildren():
+                name = child.Name
+                if name:
+                    name_lower = name.lower()
+                    if any(kw in name_lower for kw in keywords):
+                        matching_window = child
+                        break
+                        
+            if matching_window:
+                # Нашли открытое окно. Переводим на передний план.
+                try:
+                    matching_window.Restore()
+                    matching_window.SetActive()
+                    matching_window.SetFocus()
+                except Exception:
+                    try:
+                        matching_window.SetActive()
+                        matching_window.SetFocus()
+                    except Exception:
+                        pass
+                return {
+                    "status": "success",
+                    "message": f"Приложение '{app_name_clean}' уже открыто (окно: '{matching_window.Name}'). Переведено на передний план."
+                }
+        except Exception:
+            # Игнорируем ошибки проверки окон, продолжаем запуск
+            pass
+
+        # Сопоставление популярных названий с файлами/путями
+        mappings = {
+            "яндекс музыка": "yandexmusic",
+            "yandex music": "yandexmusic",
+            "браузер": "chrome",
+            "browser": "chrome",
+            "телеграм": "telegram",
+            "telegram": "telegram",
+            "калькулятор": "calc",
+            "блокнот": "notepad",
+            "проводник": "explorer",
+            "paint": "mspaint",
+        }
+        
+        target = mappings.get(lower_name, app_name_clean)
+        
+        # Разрешение стандартных путей для популярных приложений на Windows
+        if target.lower() == "yandexmusic":
+            possible_paths = [
+                os.path.expandvars(r"%LocalAppData%\Programs\YandexMusic\YandexMusic.exe"),
+                os.path.expandvars(r"%LocalAppData%\Yandex\YandexMusic\YandexMusic.exe"),
+                os.path.expandvars(r"%ProgramFiles%\Yandex\YandexMusic\YandexMusic.exe"),
+                os.path.expandvars(r"%ProgramFiles(x86)%\Yandex\YandexMusic\YandexMusic.exe"),
+            ]
+            for path in possible_paths:
+                if os.path.exists(path):
+                    target = path
+                    break
+        elif target.lower() == "telegram":
+            possible_paths = [
+                os.path.expandvars(r"%AppData%\Telegram Desktop\Telegram.exe"),
+                os.path.expandvars(r"%LocalAppData%\Programs\Telegram Desktop\Telegram.exe"),
+            ]
+            for path in possible_paths:
+                if os.path.exists(path):
+                    target = path
+                    break
+                    
+        try:
+            # Пытаемся запустить напрямую через os.startfile
+            os.startfile(target)
+            return {"status": "success", "message": f"Приложение '{app_name_clean}' запущено."}
+        except FileNotFoundError:
+            # 2. Умный поиск ярлыка (.lnk) в меню Пуск и на Рабочем столе
+            shortcut_dirs = [
+                os.path.expandvars(r"%ProgramData%\Microsoft\Windows\Start Menu\Programs"),
+                os.path.expandvars(r"%AppData%\Microsoft\Windows\Start Menu\Programs"),
+                os.path.expandvars(r"%UserProfile%\Desktop"),
+                os.path.expandvars(r"%Public%\Desktop"),
+            ]
+            
+            found_shortcut = None
+            for d in shortcut_dirs:
+                d_path = Path(d)
+                if not d_path.exists():
+                    continue
+                try:
+                    for file in d_path.rglob("*.lnk"):
+                        stem_lower = file.stem.lower()
+                        if lower_name in stem_lower or (lower_name == "yandexmusic" and ("yandex" in stem_lower or "яндекс" in stem_lower) and ("music" in stem_lower or "музык" in stem_lower)):
+                            found_shortcut = str(file.resolve())
+                            break
+                except Exception:
+                    pass
+                if found_shortcut:
+                    break
+                    
+            if found_shortcut:
+                try:
+                    os.startfile(found_shortcut)
+                    return {"status": "success", "message": f"Приложение '{app_name_clean}' найдено через умный поиск и запущено."}
+                except Exception as e:
+                    return {"status": "error", "message": f"Ярлык '{app_name_clean}' найден, но не удалось запустить: {str(e)}"}
+            
+            # 3. Попытка запуска через shell
+            try:
+                subprocess.Popen(f'start "" "{target}"', shell=True)
+                return {"status": "success", "message": f"Приложение '{app_name_clean}' запущено через shell."}
+            except Exception as e:
+                return {"status": "error", "message": f"Не удалось запустить '{app_name_clean}': {str(e)}"}
+        except Exception as e:
+            return {"status": "error", "message": f"Ошибка при запуске '{app_name_clean}': {str(e)}"}
+
+    def list_windows(self) -> Dict[str, Any]:
+        """Возвращает список всех открытых окон верхнего уровня."""
+        try:
+            import uiautomation as auto
+            root = auto.GetRootControl()
+            windows = []
+            for child in root.GetChildren():
+                name = child.Name
+                class_name = child.ClassName
+                if name and child.IsEnabled and not child.IsOffscreen:
+                    windows.append({
+                        "title": name,
+                        "class": class_name
+                    })
+            return {"status": "success", "windows": windows, "count": len(windows)}
+        except Exception as e:
+            return {"status": "error", "message": f"Ошибка перечисления окон: {str(e)}"}
+
+    def window_controls(self, window_title: str, search_query: Optional[str] = None, control_type: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Находит окно по заголовку (с поддержкой синонимов), разворачивает его, активирует доступность
+        и возвращает список всех интерактивных элементов управления, сгруппированных по типам.
+        """
+        try:
+            import uiautomation as auto
+            root = auto.GetRootControl()
+            
+            target_window = None
+            title_lower = window_title.lower().strip()
+            
+            # Определяем ключевые слова для поиска по заголовку (умный поиск окна)
+            keywords = [title_lower]
+            if title_lower in ["yandexmusic", "яндекс музыка", "yandex music"]:
+                keywords = ["яндекс", "yandex", "music", "музыка"]
+            elif title_lower in ["telegram", "телеграм"]:
+                keywords = ["telegram", "телеграм"]
+            elif title_lower in ["chrome", "браузер", "google chrome"]:
+                keywords = ["chrome", "google chrome", "браузер"]
+            elif title_lower in ["notepad", "блокнот"]:
+                keywords = ["notepad", "блокнот"]
+            elif title_lower in ["calc", "калькулятор"]:
+                keywords = ["calc", "калькулятор"]
+            elif title_lower in ["explorer", "проводник"]:
+                keywords = ["проводник", "explorer", "cabinetwclass"]
+                
+            for child in root.GetChildren():
+                if child.Name:
+                    name_lower = child.Name.lower()
+                    if any(kw in name_lower for kw in keywords):
+                        target_window = child
+                        break
+                    
+            if not target_window:
+                return {"status": "error", "message": f"Окно с заголовком '{window_title}' не найдено."}
+                
+            # Восстанавливаем окно если свернуто
+            try:
+                target_window.Restore()
+                target_window.SetActive()
+                target_window.SetFocus()
+            except Exception:
+                try:
+                    target_window.SetActive()
+                    target_window.SetFocus()
+                except Exception:
+                    pass
+            
+            # Ждем отрисовки
+            time.sleep(0.8)
+            
+            # Пробуждение Chromium/Electron
+            is_chromium = "chrome" in target_window.ClassName.lower() or "widget" in target_window.ClassName.lower()
+            rect = target_window.BoundingRectangle
+            w = rect.right - rect.left
+            h = rect.bottom - rect.top
+            
+            if is_chromium and w > 0 and h > 0:
+                # Делаем правый клик и Escape внутри webview
+                click_x = rect.left + w // 2
+                click_y = rect.top + min(200, h // 2)
+                pyautogui.rightClick(click_x, click_y)
+                time.sleep(0.3)
+                pyautogui.press('escape')
+                time.sleep(0.5)
+                
+            # Собираем элементы
+            controls = []
+            
+            def walk(control, depth=0):
+                if depth > 25:
+                    return
+                try:
+                    if control.IsOffscreen:
+                        return
+                except Exception:
+                    pass
+                try:
+                    name = control.Name
+                    c_type = control.ControlTypeName
+                    auto_id = control.AutomationId
+                except Exception:
+                    return
+                    
+                is_actionable = c_type in ["ButtonControl", "MenuItemControl", "HyperlinkControl", "TabItemControl", "EditControl", "DocumentControl", "CheckBoxControl", "RadioButtonControl", "ComboBoxControl", "ListItemControl", "GroupControl", "TextControl"]
+                
+                if is_actionable:
+                    short_type = c_type.replace("Control", "")
+                    # Фильтр по типу элемента
+                    if control_type and control_type.lower() != short_type.lower():
+                        is_actionable = False
+                    # Фильтр по названию элемента
+                    if name and search_query and search_query.lower() not in name.lower():
+                        is_actionable = False
+                
+                if name and is_actionable:
+                    controls.append({
+                        "name": name,
+                        "type": short_type,
+                        "auto_id": auto_id
+                    })
+                        
+                try:
+                    for child in control.GetChildren():
+                        walk(child, depth + 1)
+                except Exception:
+                    pass
+                    
+            walk(target_window)
+            
+            # Группируем элементы по категориям для удобства LLM
+            from collections import defaultdict
+            grouped = defaultdict(list)
+            for c in controls:
+                grouped[c["type"]].append(c["name"])
+                
+            summary_parts = []
+            for t, names in sorted(grouped.items()):
+                # Собираем уникальные отсортированные названия элементов данного типа
+                names_str = ", ".join(f"'{n}'" for n in sorted(set(names)))
+                summary_parts.append(f"{t}s: {names_str}")
+                
+            summary_str = "; ".join(summary_parts) if summary_parts else "интерактивные элементы не найдены"
+            self.current_state = "global"
+            self.current_zoom_region = None
+            
+            return {
+                "status": "success",
+                "message": f"Окно '{target_window.Name}' активно. Элементы загружены.",
+                "detected_elements": summary_str
+            }
+        except Exception as e:
+            return {"status": "error", "message": f"Ошибка анализа элементов окна: {str(e)}"}
+
+    def window_control_action(self, window_title: str, search_query: str, action: str = "click", text: Optional[str] = None, control_type: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Находит окно по заголовку, активирует его, выполняет семантический поиск элемента по search_query
+        и производит над ним указанное действие (click, double_click, right_click, type, clear_and_type, scroll).
+        """
+        try:
+            import uiautomation as auto
+            import re
+            root = auto.GetRootControl()
+            
+            target_window = None
+            title_lower = window_title.lower().strip()
+            
+            # Поиск окна
+            keywords = [title_lower]
+            if title_lower in ["yandexmusic", "яндекс музыка", "yandex music"]:
+                keywords = ["яндекс", "yandex", "music", "музыка"]
+            elif title_lower in ["telegram", "телеграм"]:
+                keywords = ["telegram", "телеграм"]
+            elif title_lower in ["chrome", "браузер", "google chrome"]:
+                keywords = ["chrome", "google chrome", "браузер"]
+            elif title_lower in ["notepad", "блокнот"]:
+                keywords = ["notepad", "блокнот"]
+            elif title_lower in ["calc", "калькулятор"]:
+                keywords = ["calc", "калькулятор"]
+            elif title_lower in ["explorer", "проводник"]:
+                keywords = ["проводник", "explorer", "cabinetwclass"]
+                
+            for child in root.GetChildren():
+                if child.Name:
+                    name_lower = child.Name.lower()
+                    if any(kw in name_lower for kw in keywords):
+                        target_window = child
+                        break
+                        
+            if not target_window:
+                return {"status": "error", "message": f"Окно с заголовком '{window_title}' не найдено."}
+                
+            # Восстанавливаем окно
+            try:
+                target_window.Restore()
+                target_window.SetActive()
+                target_window.SetFocus()
+            except Exception:
+                try:
+                    target_window.SetActive()
+                    target_window.SetFocus()
+                except Exception:
+                    pass
+                    
+            time.sleep(0.8)
+            
+            # Пробуждение Chromium/Electron
+            is_chromium = "chrome" in target_window.ClassName.lower() or "widget" in target_window.ClassName.lower()
+            rect = target_window.BoundingRectangle
+            w = rect.right - rect.left
+            h = rect.bottom - rect.top
+            
+            if is_chromium and w > 0 and h > 0:
+                click_x = rect.left + w // 2
+                click_y = rect.top + min(200, h // 2)
+                pyautogui.rightClick(click_x, click_y)
+                time.sleep(0.3)
+                pyautogui.press('escape')
+                time.sleep(0.5)
+                
+            # Собираем элементы
+            candidates = []
+            
+            def walk(control, depth=0):
+                if depth > 25:
+                    return
+                try:
+                    if control.IsOffscreen:
+                        return
+                except Exception:
+                    pass
+                try:
+                    name = control.Name
+                    c_type = control.ControlTypeName
+                    c_rect = control.BoundingRectangle
+                    auto_id = control.AutomationId
+                except Exception:
+                    return
+                    
+                is_actionable = c_type in ["ButtonControl", "MenuItemControl", "HyperlinkControl", "TabItemControl", "EditControl", "DocumentControl", "CheckBoxControl", "RadioButtonControl", "ComboBoxControl", "ListItemControl", "GroupControl", "TextControl"]
+                
+                if is_actionable and name:
+                    short_type = c_type.replace("Control", "")
+                    candidates.append({
+                        "control": control,
+                        "name": name,
+                        "type": short_type,
+                        "rect": c_rect,
+                        "auto_id": auto_id
+                    })
+                    
+                try:
+                    for child in control.GetChildren():
+                        walk(child, depth + 1)
+                except Exception:
+                    pass
+                    
+            walk(target_window)
+            
+            if not candidates:
+                return {"status": "error", "message": "В окне не найдено интерактивных элементов."}
+                
+            # Умный поиск совпадений по ключевым словам (синонимам)
+            query_tokens = [tok.strip().lower() for tok in re.split(r'[, ]+', search_query) if tok.strip()]
+            
+            best_match = None
+            best_score = -1
+            
+            for cand in candidates:
+                cand_name_lower = cand["name"].lower()
+                cand_auto_id_lower = (cand["auto_id"] or "").lower()
+                cand_type_lower = cand["type"].lower()
+                
+                if control_type and control_type.lower() != cand_type_lower:
+                    continue
+                    
+                score = 0
+                matched_tokens = 0
+                for tok in query_tokens:
+                    if tok == cand_name_lower:
+                        score += 10 # Точное совпадение
+                        matched_tokens += 1
+                    elif tok in cand_name_lower:
+                        score += 5 # Частичное совпадение
+                        matched_tokens += 1
+                    elif tok in cand_auto_id_lower:
+                        score += 2 # Совпадение ID
+                        matched_tokens += 1
+                        
+                if matched_tokens > 0:
+                    score += (1.0 / (len(cand_name_lower) + 1)) # Приоритет для коротких имен
+                    if score > best_score:
+                        best_score = score
+                        best_match = cand
+                        
+            if not best_match:
+                return {"status": "error", "message": f"Не удалось найти элемент управления по запросу '{search_query}'."}
+                
+            # Выполняем действие
+            ctrl = best_match["control"]
+            c_rect = best_match["rect"]
+            cx = (c_rect.left + c_rect.right) // 2
+            cy = (c_rect.top + c_rect.bottom) // 2
+            
+            act = action.lower().strip()
+            
+            if act == "click":
+                pyautogui.click(cx, cy)
+            elif act == "double_click":
+                pyautogui.doubleClick(cx, cy)
+            elif act == "right_click":
+                pyautogui.rightClick(cx, cy)
+            elif act == "type":
+                if not text:
+                    return {"status": "error", "message": "Параметр 'text' обязателен для действия 'type'."}
+                pyautogui.click(cx, cy)
+                time.sleep(0.15)
+                pyautogui.typewrite(text, interval=0.01)
+            elif act == "clear_and_type":
+                if not text:
+                    return {"status": "error", "message": "Параметр 'text' обязателен для действия 'clear_and_type'."}
+                pyautogui.click(cx, cy)
+                time.sleep(0.15)
+                pyautogui.hotkey('ctrl', 'a')
+                time.sleep(0.1)
+                pyautogui.press('backspace')
+                time.sleep(0.1)
+                pyautogui.typewrite(text, interval=0.01)
+            elif act == "scroll":
+                try:
+                    ctrl.SetFocus()
+                except Exception:
+                    pyautogui.click(cx, cy)
+                time.sleep(0.1)
+                pyautogui.scroll(120)
+            else:
+                return {"status": "error", "message": f"Неизвестное действие '{action}'."}
+                
+            return {
+                "status": "success",
+                "message": f"Выполнено действие '{action}' над элементом {best_match['type']} '{best_match['name']}' в окне '{target_window.Name}'."
+            }
+        except Exception as e:
+            return {"status": "error", "message": f"Ошибка выполнения действия в окне: {str(e)}"}
 
     def _get_font(self, size: int) -> ImageFont.FreeTypeFont:
         try:
@@ -84,30 +677,16 @@ class ScreenManager:
         return img, mapping
 
     def view(self) -> Dict[str, Any]:
-        """Скриншот всех экранов с глобальной сеткой."""
-        self.cell_mapping = {}
+        """Скриншот всех экранов без сетки и разметки."""
         image_paths = []
-        cell_id_counter = 1
-        
-        # Перебираем все мониторы (индексы с 1)
         for i, monitor in enumerate(self.sct.monitors[1:], start=1):
             if self.ui_callback:
                 self.ui_callback("screenshot", monitor_index=i)
             sct_img = self.sct.grab(monitor)
             img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
             
-            # Если мониторов несколько, можно добавить префикс M1-, M2- 
-            # но для простоты мы используем сквозную нумерацию клеток.
-            img_with_grid, mapping = self._draw_grid_on_image(img.copy(), self.global_cells_x, self.global_cells_y, start_cell_id=cell_id_counter)
-            
-            # Добавляем инфу о мониторе в маппинг
-            for cid, data in mapping.items():
-                data["monitor_index"] = i
-                self.cell_mapping[cid] = data
-                cell_id_counter = max(cell_id_counter, cid + 1)
-            
             save_path = self.tmp_dir / f"screen_global_m{i}_{int(time.time())}.jpg"
-            img_with_grid.save(save_path, quality=85)
+            img.save(save_path, quality=85)
             image_paths.append(str(save_path))
             
         self.current_state = "global"
@@ -116,129 +695,9 @@ class ScreenManager:
         
         return {
             "status": "success",
-            "message": f"Скриншоты сделаны (мониторов: {len(image_paths)}). Доступны клетки от 1 до {len(self.cell_mapping)}.",
+            "message": f"Скриншоты сделаны (мониторов: {len(image_paths)}).",
             "image_paths": image_paths
         }
-
-    def zoom(self, cells: List[int]) -> Dict[str, Any]:
-        """Зум в указанные клетки."""
-        if self.current_state != "global":
-            return {"status": "error", "message": "Зум доступен только из глобального вида. Сначала вызовите screen_view."}
-            
-        if not cells:
-            return {"status": "error", "message": "Не указаны клетки для зума."}
-            
-        valid_cells = [c for c in cells if c in self.cell_mapping]
-        if not valid_cells:
-            return {"status": "error", "message": "Указаны неверные номера клеток."}
-            
-        # Находим к какому монитору относятся клетки
-        # Предполагаем, что зум происходит в рамках одного монитора
-        target_monitor_idx = self.cell_mapping[valid_cells[0]].get("monitor_index", 1)
-        monitor = self.sct.monitors[target_monitor_idx]
-        
-        # Bounding box для выбранных клеток (относительно локальных координат скриншота монитора)
-        min_x = min([self.cell_mapping[c]["x"] for c in valid_cells])
-        min_y = min([self.cell_mapping[c]["y"] for c in valid_cells])
-        max_x = max([self.cell_mapping[c]["x"] + self.cell_mapping[c]["w"] for c in valid_cells])
-        max_y = max([self.cell_mapping[c]["y"] + self.cell_mapping[c]["h"] for c in valid_cells])
-        
-        width = max_x - min_x
-        height = max_y - min_y
-        
-        # Margin 50% для захвата соседних элементов
-        margin_x = int(width * 0.50)
-        margin_y = int(height * 0.50)
-        
-        z_x = max(0, int(min_x - margin_x))
-        z_y = max(0, int(min_y - margin_y))
-        z_w = min(monitor["width"] - z_x, int(width + 2 * margin_x))
-        z_h = min(monitor["height"] - z_y, int(height + 2 * margin_y))
-        
-        if self.ui_callback:
-            cells_data = []
-            for c in valid_cells:
-                cell_info = self.cell_mapping[c]
-                cells_data.append({
-                    "x": cell_info["x"],
-                    "y": cell_info["y"],
-                    "w": cell_info["w"],
-                    "h": cell_info["h"],
-                    "label": f"{c}"
-                })
-            self.ui_callback("zoom_preview", monitor_index=target_monitor_idx, region={
-                "x": z_x,
-                "y": z_y,
-                "w": z_w,
-                "h": z_h
-            }, cells_data=cells_data)
-            # brief pause to allow visual representation to play
-            time.sleep(0.3)
-            
-        # Глобальные координаты для mss
-        bbox = {"top": int(z_y + monitor["top"]), "left": int(z_x + monitor["left"]), "width": int(z_w), "height": int(z_h)}
-        sct_img = self.sct.grab(bbox)
-        img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
-        
-        # Масштабируем x6 для лучшей читаемости и детализации
-        img_upscaled = img.resize((img.width * 6, img.height * 6), Image.LANCZOS)
-        
-        img_with_grid, mapping = self._draw_grid_on_image(img_upscaled, self.zoom_cells_x, self.zoom_cells_y, prefix="Z-")
-        
-        # Возвращаем координаты обратно к оригинальному масштабу, чтобы клик был точным
-        for k in mapping:
-            mapping[k]["cx"] = int(mapping[k]["cx"] / 6)
-            mapping[k]["cy"] = int(mapping[k]["cy"] / 6)
-            mapping[k]["w"] = int(mapping[k]["w"] / 6)
-            mapping[k]["h"] = int(mapping[k]["h"] / 6)
-            mapping[k]["x"] = int(mapping[k]["x"] / 6)
-            mapping[k]["y"] = int(mapping[k]["y"] / 6)
-        
-        self.current_state = "zoom"
-        self.current_zoom_region = {"x": z_x, "y": z_y, "w": z_w, "h": z_h, "monitor_index": target_monitor_idx}
-        self.cell_mapping = mapping
-        
-        save_path = self.tmp_dir / f"screen_zoom_{int(time.time())}.jpg"
-        img_with_grid.save(save_path, quality=85)
-        self.last_image_path = str(save_path)
-        
-        return {
-            "status": "success",
-            "message": f"Зум выполнен. Доступны клетки от 1 до {len(mapping)} с префиксом 'Z-'.",
-            "image_paths": [str(save_path)]
-        }
-
-    def click(self, cell_id: int) -> Dict[str, Any]:
-        """Клик по клетке."""
-        if cell_id not in self.cell_mapping:
-            return {"status": "error", "message": f"Клетка {cell_id} не найдена."}
-            
-        cell = self.cell_mapping[cell_id]
-        cx, cy = cell["cx"], cell["cy"]
-        
-        target_monitor_idx = cell.get("monitor_index", 1)
-        if self.current_state == "zoom" and self.current_zoom_region:
-            target_monitor_idx = self.current_zoom_region.get("monitor_index", 1)
-            
-        monitor = self.sct.monitors[target_monitor_idx]
-        
-        if self.current_state == "zoom" and self.current_zoom_region:
-            global_x = monitor["left"] + self.current_zoom_region["x"] + cx
-            global_y = monitor["top"] + self.current_zoom_region["y"] + cy
-        else:
-            global_x = monitor["left"] + cx
-            global_y = monitor["top"] + cy
-            
-        if self.ui_callback:
-            self.ui_callback("click", x=global_x, y=global_y)
-            time.sleep(0.3)
-            
-        pyautogui.click(global_x, global_y)
-        
-        self.current_state = "global"
-        self.current_zoom_region = None
-        
-        return {"status": "success", "message": f"Клик по ({global_x}, {global_y}). Зум сброшен."}
 
     def type_text(self, text: str) -> Dict[str, Any]:
         pyautogui.typewrite(text, interval=0.01)
@@ -248,17 +707,26 @@ class ScreenManager:
 screen_manager = ScreenManager()
 
 def screen_view() -> Dict[str, Any]:
-    """Делает скриншот всего экрана и накладывает координатную сетку. Возвращает путь к картинке."""
+    """Делает скриншот всех экранов в чистом виде (без координатной сетки)."""
     return screen_manager.view()
-
-def screen_zoom(cells: List[int]) -> Dict[str, Any]:
-    """Делает зум (увеличение) в указанные клетки. Принимает список номеров клеток, например [42, 43]. Возвращает картинку."""
-    return screen_manager.zoom(cells)
-
-def screen_click(cell_id: int) -> Dict[str, Any]:
-    """Кликает по центру указанной клетки. Сбрасывает зум после выполнения."""
-    return screen_manager.click(cell_id)
 
 def screen_type(text: str) -> Dict[str, Any]:
     """Вводит переданный текст с клавиатуры."""
     return screen_manager.type_text(text)
+
+def screen_list_windows() -> Dict[str, Any]:
+    """Возвращает список всех открытых окон верхнего уровня."""
+    return screen_manager.list_windows()
+
+def screen_window_controls(window_title: str, search_query: Optional[str] = None, control_type: Optional[str] = None) -> Dict[str, Any]:
+    """Находит окно по заголовку, разворачивает его и возвращает список всех интерактивных элементов управления, сгруппированных по типам."""
+    return screen_manager.window_controls(window_title, search_query, control_type)
+
+def screen_window_control_action(window_title: str, search_query: str, action: str = "click", text: Optional[str] = None, control_type: Optional[str] = None) -> Dict[str, Any]:
+    """Находит окно по заголовку, разворачивает его, ищет элемент по ключевым словам и производит над ним указанное действие (click, type и т.д.)."""
+    return screen_manager.window_control_action(window_title, search_query, action, text, control_type)
+
+def screen_open_app(app_name: str) -> Dict[str, Any]:
+    """Запускает приложение по имени или пути."""
+    return screen_manager.open_app(app_name)
+

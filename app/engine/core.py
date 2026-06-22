@@ -131,17 +131,8 @@ class AriumEngine:
             stt_model = None
 
         self.stt = create_stt(stt_provider, stt_model, device=system_device)
-
-        logger.info("🔧 Инициализация VAD (Silero)...")
-        import torch
         self.device = system_device
-        self.vad_model, _ = torch.hub.load(
-            repo_or_dir='snakers4/silero-vad',
-            model='silero_vad',
-            force_reload=False,
-            trust_repo=True
-        )
-        self.vad_model.to(self.device)
+        self.vad_model = None
 
         logger.info("🔧 Инициализация Универсального LLM...")
         tool_handlers = get_tool_handlers(
@@ -676,6 +667,17 @@ class AriumEngine:
     def _stt_worker_live_vad(self):
         """Режим Continuous STT (Live VAD)."""
         logger.info("🎤 Слушаю (Live VAD mode)...")
+        
+        if self.vad_model is None:
+            logger.info("🔧 Инициализация VAD (Silero)...")
+            import torch
+            self.vad_model, _ = torch.hub.load(
+                repo_or_dir='snakers4/silero-vad',
+                model='silero_vad',
+                force_reload=False,
+                trust_repo=True
+            )
+            self.vad_model.to(self.device)
         
         chunk_size = 512
         vad_threshold_start = float(self.settings.get('controls.vad_threshold_start', 0.5))
