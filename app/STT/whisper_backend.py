@@ -21,8 +21,10 @@ class WhisperSTT:
             raise ValueError("Whisper backend requires a valid model_name (not None)")
         
         # Валидация имени модели (предотвращает ошибки с несуществующими моделями)
-        if model_name not in self.OFFICIAL_MODELS:
-            print(f"⚠️  Предупреждение: модель '{model_name}' не в списке официальных ({self.OFFICIAL_MODELS})")
+        import os
+        is_file_path = os.path.exists(model_name) or model_name.endswith('.pt')
+        if not is_file_path and model_name not in self.OFFICIAL_MODELS:
+            print(f"[WARN] Предупреждение: модель '{model_name}' не в списке официальных ({self.OFFICIAL_MODELS})")
             print(f"    Возможные варианты: 'tiny', 'base', 'small', 'medium', 'large', 'large-v2', 'large-v3'")
         
         # Определение устройства
@@ -33,18 +35,17 @@ class WhisperSTT:
         self.model_dir.mkdir(parents=True, exist_ok=True)
         
         try:
-            print(f"📥 Загрузка/загрузка из кэша модели Whisper: {model_name}")
+            print(f"[INFO] Загрузка модели Whisper: {model_name}")
             print(f"   Кэш: {self.model_dir}")
             print(f"   Устройство: {self.device} {'(FP16)' if self.use_fp16 else '(FP32)'}")
             
-            # 🔑 ИСПРАВЛЕНИЕ: НЕ вызываем .half() вручную — только загрузка на устройство
             self.model = whisper.load_model(
                 model_name,
                 device=self.device,
                 download_root=str(self.model_dir)
             )
             
-            print(f"✅ Модель Whisper готова на {self.device}")
+            print(f"[OK] Модель Whisper готова на {self.device}")
         except ImportError:
             raise RuntimeError(
                 "PyTorch не установлен. Установите зависимости:\n"

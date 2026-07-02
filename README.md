@@ -1,448 +1,214 @@
-# Arium - Многопоточная система обработки речи
+# Project X
 
-> Полностью переработанная архитектура с использованием OpenAI SDK (OpenRouter), многопоточностью и параллельной обработкой
+[Project X](https://github.com/XTLS) originates from XTLS protocol, providing a set of network tools such as [Xray-core](https://github.com/XTLS/Xray-core) and [REALITY](https://github.com/XTLS/REALITY).
 
-## 🚀 Что нового
+[README](https://github.com/XTLS/Xray-core#readme) is open, so feel free to submit your project [here](https://github.com/XTLS/Xray-core/pulls).
 
-### Основные изменения
+## Sponsors
 
-✅ **OpenRouter с OpenAI SDK** - Используется официальный OpenAI SDK вместо raw HTTP запросов  
-✅ **Многопоточная архитектура** - 3 независимых потока для записи, обработки и воспроизведения  
-✅ **Параллельная обработка Tool Calls** - Инструменты выполняются одновременно, не последовательно  
-✅ **Streaming с буферизацией** - Сборка чанков streaming ответа в полное сообщение  
-✅ **Общие утилиты (llm_common)** - Переиспользуемые компоненты для будущих LLM обработчиков  
-✅ **Text-to-Speech (TTS)** - Силеро синтез речи с воспроизведением в фоне  
-✅ **Thread-safe очереди** - Синхронизация между потоками через queue.Queue  
-✅ **Graceful shutdown** - Корректное завершение всех потоков при Ctrl+C  
+[![Remnawave](https://github.com/user-attachments/assets/a22d34ae-01ee-441c-843a-85356748ed1e)](https://docs.rw)
 
----
+[![Happ](https://github.com/user-attachments/assets/14055dab-e8bb-48bd-89e8-962709e4098e)](https://happ.su)
 
-## 📁 Новые файлы
+[![BlancVPN](https://github.com/user-attachments/assets/9145ea7d-5da3-446e-8143-710dba4292c3)](https://blanc.link/VMTSDqW)
 
-| Файл | Описание |
-|------|---------|
-| [app/llm_common.py](app/llm_common.py) | Общие утилиты для всех LLM обработчиков |
-| [app/openrouter_handler.py](app/openrouter_handler.py) | Обработчик OpenRouter с OpenAI SDK |
-| [app/tts.py](app/tts.py) | Text-to-Speech (Silero) с воспроизведением |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Подробное описание архитектуры |
-| [QUICKSTART.md](QUICKSTART.md) | Быстрый старт за 5 минут |
-| [EXAMPLES.md](EXAMPLES.md) | 13 практических примеров использования |
+[**Sponsor Xray-core**](https://github.com/XTLS/Xray-core/issues/3668)
 
----
+## Donation & NFTs
 
-## 🏗️ Архитектура
+### [Collect a Project X NFT to support the development of Project X!](https://opensea.io/item/ethereum/0x5ee362866001613093361eb8569d59c4141b76d1/1)
 
-### Три независимых потока
+[<img alt="Project X NFT" width="150px" src="https://raw2.seadn.io/ethereum/0x5ee362866001613093361eb8569d59c4141b76d1/7fa9ce900fb39b44226348db330e32/8b7fa9ce900fb39b44226348db330e32.svg" />](https://opensea.io/item/ethereum/0x5ee362866001613093361eb8569d59c4141b76d1/1)
 
-```
-┌─────────────────────────────────────┐
-│  Поток 1: Запись голоса (Recording) │  → voice_input_queue
-├─────────────────────────────────────┤
-│   • Слушает микрофон                │
-│   • STT (Vosk/Whisper)              │
-│   • Распознает текст                │
-└─────────────────────────────────────┘
-             ↓
-┌─────────────────────────────────────┐
-│ Поток 2: Обработка ИИ (AI Processing)│  → ai_response_queue
-├─────────────────────────────────────┤
-│  • Читает из очереди                │
-│  • Отправляет к OpenRouter          │
-│  • Обработка Tool Calls (параллель) │
-│  • Сохраняет в историю              │
-└─────────────────────────────────────┘
-             ↓
-┌─────────────────────────────────────┐
-│  Поток 3: Воспроизведение (Playback)│
-├─────────────────────────────────────┤
-│  • Синтезирует TTS (Silero)        │
-│  • Воспроизводит через динамики    │
-│  • Работает параллельно             │
-└─────────────────────────────────────┘
-```
+- **TRX(Tron)/USDT/USDC: `TNrDh5VSfwd4RPrwsohr6poyNTfFefNYan`**
+- **TON: `UQApeV-u2gm43aC1uP76xAC1m6vCylstaN1gpfBmre_5IyTH`**
+- **BTC: `1JpqcziZZuqv3QQJhZGNGBVdCBrGgkL6cT`**
+- **XMR: `4ABHQZ3yJZkBnLoqiKvb3f8eqUnX4iMPb6wdant5ZLGQELctcerceSGEfJnoCk6nnyRZm73wrwSgvZ2WmjYLng6R7sR67nq`**
+- **SOL/USDT/USDC: `3x5NuXHzB5APG6vRinPZcsUv5ukWUY1tBGRSJiEJWtZa`**
+- **ETH/USDT/USDC: `0xDc3Fe44F0f25D13CACb1C4896CD0D321df3146Ee`**
+- **Project X NFT: https://opensea.io/item/ethereum/0x5ee362866001613093361eb8569d59c4141b76d1/1**
+- **VLESS NFT: https://opensea.io/collection/vless**
+- **REALITY NFT: https://opensea.io/item/ethereum/0x5ee362866001613093361eb8569d59c4141b76d1/2**
+- **Related links: [VLESS Post-Quantum Encryption](https://github.com/XTLS/Xray-core/pull/5067), [XHTTP: Beyond REALITY](https://github.com/XTLS/Xray-core/discussions/4113), [Announcement of NFTs by Project X](https://github.com/XTLS/Xray-core/discussions/3633)**
 
-### Очереди (Thread-Safe)
+## License
 
-```python
-voice_input_queue   # str → распознанный текст
-ai_response_queue   # Dict → ответ ИИ
-state_lock         # Lock → синхронизация доступа
-```
+[Mozilla Public License Version 2.0](https://github.com/XTLS/Xray-core/blob/main/LICENSE)
 
----
+## Documentation
 
-## 🚄 Быстрая установка
+[Project X Official Website](https://xtls.github.io)
 
-### Способ 1: Через установщик (РЕКОМЕНДУЕТСЯ) ⭐
+## Telegram
 
-Установщик проверяет Python 3.11, создает окружение и устанавливает все зависимости автоматически.
+[Project X](https://t.me/projectXray)
 
-**Windows PowerShell:**
+[Project X Channel](https://t.me/projectXtls)
+
+[Project VLESS](https://t.me/projectVless) (Русский)
+
+[Project XHTTP](https://t.me/projectXhttp) (Persian)
+
+## Installation
+
+- Linux Script
+  - [XTLS/Xray-install](https://github.com/XTLS/Xray-install) (**Official**)
+  - [tempest](https://github.com/team-cloudchaser/tempest) (supports [`systemd`](https://systemd.io) and [OpenRC](https://github.com/OpenRC/openrc); Linux-only)
+- Docker
+  - [ghcr.io/xtls/xray-core](https://ghcr.io/xtls/xray-core) (**Official**)
+  - [teddysun/xray](https://hub.docker.com/r/teddysun/xray)
+  - [wulabing/xray_docker](https://github.com/wulabing/xray_docker)
+- Web Panel
+  - [Remnawave](https://github.com/remnawave/panel)
+  - [3X-UI](https://github.com/MHSanaei/3x-ui)
+  - [PasarGuard](https://github.com/PasarGuard/panel)
+  - [Xray-UI](https://github.com/qist/xray-ui)
+  - [X-Panel](https://github.com/xeefei/X-Panel)
+  - [Marzban](https://github.com/Gozargah/Marzban)
+  - [Hiddify](https://github.com/hiddify/Hiddify-Manager)
+  - [TX-UI](https://github.com/AghayeCoder/tx-ui)
+  - [CELERITY](https://github.com/ClickDevTech/CELERITY-panel)
+- One Click
+  - [Xray-REALITY](https://github.com/zxcvos/Xray-script), [xray-reality](https://github.com/sajjaddg/xray-reality), [reality-ezpz](https://github.com/aleskxyz/reality-ezpz)
+  - [Xray_bash_onekey](https://github.com/hello-yunshu/Xray_bash_onekey), [XTool](https://github.com/LordPenguin666/XTool), [VPainLess](https://github.com/vpainless/vpainless)
+  - [v2ray-agent](https://github.com/mack-a/v2ray-agent), [Xray_onekey](https://github.com/wulabing/Xray_onekey), [ProxySU](https://github.com/proxysu/ProxySU)
+- Magisk
+  - [NetProxy-Magisk](https://github.com/Fanju6/NetProxy-Magisk)
+  - [Xray4Magisk](https://github.com/Asterisk4Magisk/Xray4Magisk)
+  - [Xray_For_Magisk](https://github.com/E7KMbb/Xray_For_Magisk)
+- Homebrew
+  - `brew install xray`
+
+## Usage
+
+- Example
+  - [VLESS-XTLS-uTLS-REALITY](https://github.com/XTLS/REALITY#readme)
+  - [VLESS-TCP-XTLS-Vision](https://github.com/XTLS/Xray-examples/tree/main/VLESS-TCP-XTLS-Vision)
+  - [All-in-One-fallbacks-Nginx](https://github.com/XTLS/Xray-examples/tree/main/All-in-One-fallbacks-Nginx)
+- Xray-examples
+  - [XTLS/Xray-examples](https://github.com/XTLS/Xray-examples)
+  - [chika0801/Xray-examples](https://github.com/chika0801/Xray-examples)
+  - [lxhao61/integrated-examples](https://github.com/lxhao61/integrated-examples)
+- Tutorial
+  - [XTLS Vision](https://github.com/chika0801/Xray-install)
+  - [REALITY (English)](https://cscot.pages.dev/2023/03/02/Xray-REALITY-tutorial/)
+  - [XTLS-Iran-Reality (English)](https://github.com/SasukeFreestyle/XTLS-Iran-Reality)
+  - [Xray REALITY with 'steal oneself' (English)](https://computerscot.github.io/vless-xtls-utls-reality-steal-oneself.html)
+  - [Xray with WireGuard inbound (English)](https://g800.pages.dev/wireguard)
+
+## GUI Clients
+
+- OpenWrt
+  - [PassWall](https://github.com/Openwrt-Passwall/openwrt-passwall), [PassWall 2](https://github.com/Openwrt-Passwall/openwrt-passwall2)
+  - [ShadowSocksR Plus+](https://github.com/fw876/helloworld)
+  - [luci-app-xray](https://github.com/yichya/luci-app-xray) ([openwrt-xray](https://github.com/yichya/openwrt-xray))
+- Asuswrt-Merlin
+  - [XRAYUI](https://github.com/DanielLavrushin/asuswrt-merlin-xrayui)
+  - [fancyss](https://github.com/hq450/fancyss)
+- Windows
+  - [v2rayN](https://github.com/2dust/v2rayN)
+  - [Furious](https://github.com/LorenEteval/Furious)
+  - [Invisible Man - Xray](https://github.com/InvisibleManVPN/InvisibleMan-XRayClient)
+  - [AnyPortal](https://github.com/AnyPortal/AnyPortal)
+  - [GenyConnect](https://github.com/genyleap/GenyConnect)
+- Android
+  - [v2rayNG](https://github.com/2dust/v2rayNG)
+  - [X-flutter](https://github.com/XTLS/X-flutter)
+  - [SaeedDev94/Xray](https://github.com/SaeedDev94/Xray)
+  - [SimpleXray](https://github.com/lhear/SimpleXray)
+  - [XrayFA](https://github.com/Q7DF1/XrayFA)
+  - [AnyPortal](https://github.com/AnyPortal/AnyPortal)
+  - [NetProxy-Magisk](https://github.com/Fanju6/NetProxy-Magisk)
+- iOS & macOS arm64 & tvOS
+  - [Happ](https://apps.apple.com/app/happ-proxy-utility/id6504287215) | [Happ RU](https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973) | [Happ tvOS](https://apps.apple.com/us/app/happ-proxy-utility-for-tv/id6748297274)
+  - [Streisand](https://apps.apple.com/app/streisand/id6450534064)
+  - [OneXray](https://github.com/OneXray/OneXray)
+  - [INCY](https://apps.apple.com/en/app/incy/id6756943388)
+- macOS arm64 & x64
+  - [Happ](https://apps.apple.com/app/happ-proxy-utility/id6504287215) | [Happ RU](https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973)
+  - [V2rayU](https://github.com/yanue/V2rayU)
+  - [V2RayXS](https://github.com/tzmax/V2RayXS)
+  - [Furious](https://github.com/LorenEteval/Furious)
+  - [OneXray](https://github.com/OneXray/OneXray)
+  - [GoXRay](https://github.com/goxray/desktop)
+  - [AnyPortal](https://github.com/AnyPortal/AnyPortal)
+  - [v2rayN](https://github.com/2dust/v2rayN)
+  - [GenyConnect](https://github.com/genyleap/GenyConnect)
+  - [INCY](https://apps.apple.com/en/app/incy/id6756943388)
+- Linux
+  - [v2rayA](https://github.com/v2rayA/v2rayA)
+  - [Furious](https://github.com/LorenEteval/Furious)
+  - [GorzRay](https://github.com/ketetefid/GorzRay)
+  - [GoXRay](https://github.com/goxray/desktop)
+  - [AnyPortal](https://github.com/AnyPortal/AnyPortal)
+  - [v2rayN](https://github.com/2dust/v2rayN)
+  - [GenyConnect](https://github.com/genyleap/GenyConnect)
+
+## Others that support VLESS, XTLS, REALITY, XUDP, PLUX...
+
+- iOS & macOS arm64 & tvOS
+  - [Shadowrocket](https://apps.apple.com/app/shadowrocket/id932747118)
+  - [Loon](https://apps.apple.com/us/app/loon/id1373567447)
+  - [Egern](https://apps.apple.com/us/app/egern/id1616105820)
+  - [Quantumult X](https://apps.apple.com/us/app/quantumult-x/id1443988620)
+- Xray Tools
+  - [xray-knife](https://github.com/lilendian0x00/xray-knife)
+  - [xray-checker](https://github.com/kutovoys/xray-checker)
+- Xray Wrapper
+  - [XTLS/libXray](https://github.com/XTLS/libXray)
+  - [xtls-sdk](https://github.com/remnawave/xtls-sdk)
+  - [xtlsapi](https://github.com/hiddify/xtlsapi)
+  - [AndroidLibXrayLite](https://github.com/2dust/AndroidLibXrayLite)
+  - [Xray-core-python](https://github.com/LorenEteval/Xray-core-python)
+  - [xray-api](https://github.com/XVGuardian/xray-api)
+- [XrayR](https://github.com/XrayR-project/XrayR)
+  - [XrayR-release](https://github.com/XrayR-project/XrayR-release)
+  - [XrayR-V2Board](https://github.com/missuo/XrayR-V2Board)
+- Cores
+  - [Amnezia VPN](https://github.com/amnezia-vpn)
+  - [mihomo](https://github.com/MetaCubeX/mihomo)
+  - [sing-box](https://github.com/SagerNet/sing-box)
+
+## Contributing
+
+[Code of Conduct](https://github.com/XTLS/Xray-core/blob/main/CODE_OF_CONDUCT.md)
+
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/XTLS/Xray-core)
+
+## Credits
+
+- [Xray-core v1.0.0](https://github.com/XTLS/Xray-core/releases/tag/v1.0.0) was forked from [v2fly-core 9a03cc5](https://github.com/v2fly/v2ray-core/commit/9a03cc5c98d04cc28320fcee26dbc236b3291256), and we have made & accumulated a huge number of enhancements over time, check [the release notes for each version](https://github.com/XTLS/Xray-core/releases).
+- For third-party projects used in [Xray-core](https://github.com/XTLS/Xray-core), check your local or [the latest go.mod](https://github.com/XTLS/Xray-core/blob/main/go.mod).
+
+## One-line Compilation
+
+### Windows (PowerShell)
+
 ```powershell
-./install.ps1 -Profile cu130 -PythonMode auto-install
+$env:CGO_ENABLED=0
+go build -o xray.exe -trimpath -buildvcs=false -ldflags="-s -w -buildid=" -v ./main
 ```
 
-**Linux/macOS:**
-```bash
-chmod +x install.sh
-./install.sh cu130 auto-install
-```
-
-Для CPU-only версии (без GPU):
-```powershell
-./install.ps1 -Profile cpu
-```
-
-### Способ 2: Ручная установка
+### Linux / macOS
 
 ```bash
-# 1. Создайте окружение
-python -m venv .venv
-
-# 2. Активируйте
-.venv\Scripts\activate        # Windows
-source .venv/bin/activate     # Linux/macOS
-
-# 3. Установите зависимости
-pip install -r requirements.txt
+CGO_ENABLED=0 go build -o xray -trimpath -buildvcs=false -ldflags="-s -w -buildid=" -v ./main
 ```
 
-Для CPU-only:
-```bash
-pip install -r requirements/base.txt
-pip install -r requirements/torch-cpu.txt --index-url https://download.pytorch.org/whl/cpu
-```
+### Reproducible Releases
 
-### 2. API ключ
+Make sure that you are using the same Go version, and remember to set the git commit id (7 bytes):
 
 ```bash
-set OPENROUTER_API_KEY=sk_ваш_ключ        # Windows
-export OPENROUTER_API_KEY=sk_ваш_ключ     # Linux/macOS
+CGO_ENABLED=0 go build -o xray -trimpath -buildvcs=false -gcflags="all=-l=4" -ldflags="-X github.com/xtls/xray-core/core.build=REPLACE -s -w -buildid=" -v ./main
 ```
 
-### 3. Запуск
+If you are compiling a 32-bit MIPS/MIPSLE target, use this command instead:
 
 ```bash
-python app/main.py
+CGO_ENABLED=0 go build -o xray -trimpath -buildvcs=false -gcflags="-l=4" -ldflags="-X github.com/xtls/xray-core/core.build=REPLACE -s -w -buildid=" -v ./main
 ```
 
-**Остановка**: `Ctrl+C`
+## Stargazers over time
 
----
-
-## 💻 Примеры кода
-
-### Базовое использование ИИ
-
-```python
-from app.openrouter_handler import OpenRouterHandler
-
-handler = OpenRouterHandler(api_key="sk_...")
-response = handler.send_message([
-    {"role": "user", "content": "Привет!"}
-])
-print(response["content"])
-```
-
-### Использование Tool Calling
-
-```python
-handler = OpenRouterHandler(
-    api_key="sk_...",
-    tool_handlers={
-        "search_web": search_function,
-        "get_weather": weather_function,
-    }
-)
-
-# Tool calls обрабатываются автоматически параллельно!
-response = handler.send_message(messages)
-```
-
-### Синтез и воспроизведение речи
-
-```python
-from app.tts import TTSController
-
-tts = TTSController()
-tts.initialize()
-tts.speak("Привет, это синтезированная речь")
-tts.wait_completion()
-```
-
-### Работа с историей
-
-```python
-from app.main import load_history_from_file, save_history_to_file
-
-messages = load_history_from_file(Path("app/data/chat_history.json"))
-print(f"Загружено {len(messages)} сообщений")
-```
-
-**Больше примеров**: [EXAMPLES.md](EXAMPLES.md)
-
----
-
-## 🔧 Конфигурация
-
-### settings.json
-
-```json
-{
-  "current_model": "openai/gpt-4-turbo",
-  "stt_provider": "whisper",
-  "stt_model": "small",
-  "tts_speaker": "kseniya"
-}
-```
-
-### Доступные модели
-
-| Модель | Скорость | Качество | Стоимость |
-|--------|----------|----------|----------|
-| openai/gpt-4-turbo | Медленно | Отличное | Высокая |
-| openai/gpt-4 | Медленно | Отличное | Высокая |
-| openai/gpt-3.5-turbo | Быстро | Хорошее | Низкая |
-| qwen2.5-7b | Быстро | Хорошее | Низкая |
-| deepseek-chat | Средне | Хорошее | Низкая |
-
-### STT бэкенды
-
-```bash
-python app/main.py vosk vosk-model-small-ru-0.22    # Быстро, локально
-python app/main.py whisper small                     # Точнее
-python app/main.py google                            # Онлайн
-```
-
-### TTS голоса
-
-```python
-tts.initialize(speaker='kseniya')      # Женский (default)
-tts.initialize(speaker='baya')         # Женский (альт)
-tts.initialize(speaker='en_0')         # Английский мужской
-```
-
----
-
-## 📊 Структура проекта
-
-```
-app/
-  ├── main.py                     # Главное приложение (с потоками)
-  ├── llm_common.py              # Общие утилиты для LLM
-  ├── openrouter_handler.py      # Обработчик OpenRouter
-  ├── tts.py                     # Text-to-Speech (Silero)
-  ├── STT/
-  │   ├── __init__.py            # Factory для STT
-  │   ├── vosk_backend.py
-  │   ├── whisper_backend.py
-  │   └── google_backend.py
-  ├── TTS/
-  │   ├── __init__.py
-  │   └── silero.py
-  ├── utils/
-  │   └── settings.py            # Управление настройками
-  ├── data/
-  │   └── chat_history.json      # История диалога
-  ├── model/                      # Кэш моделей
-  │   ├── whisper/
-  │   ├── vosk/
-  │   └── silero/
-  └── config/
-      └── logs.log               # Логи приложения
-
-.github/
-  └── copilot-instructions.md    # Инструкции для AI
-
-ARCHITECTURE.md                  # Подробное описание архитектуры
-QUICKSTART.md                    # Быстрый старт
-EXAMPLES.md                      # 13 примеров использования
-```
-
----
-
-## 🎯 Ключевые особенности
-
-### 1. Многопоточность
-
-Все три компонента работают **параллельно**:
-- Можно говорить, пока ИИ обрабатывает
-- Можно говорить, пока воспроизводится ответ
-- Запись продолжается во время всех операций
-
-### 2. Tool Calling
-
-Tool calls выполняются **параллельно** в ThreadPoolExecutor:
-```python
-# Все 3 функции выполняются одновременно, не по очереди
-search_web(query)
-get_weather(location)
-get_time()
-```
-
-### 3. Streaming
-
-Ответ обрабатывается по частям (чанкам):
-- Прогресс видн сразу
-- Не нужно ждать полного ответа
-- Можно начать воспроизведение раньше
-
-### 4. История
-
-Автоматически сохраняется после каждого обновления:
-- Сообщения пользователя
-- Ответы ИИ
-- Reasoning процесс
-- Tool calls и результаты
-- Timestamps и metadata
-
-### 5. Graceful Shutdown
-
-Нажимаете `Ctrl+C`:
-- Устанавливается флаг `app_state.running = False`
-- Все потоки корректно завершают работу
-- Нет зависших процессов
-
----
-
-## 🔄 Поток выполнения
-
-```
-1. Пользователь говорит в микрофон
-   ↓
-2. Recording Thread распознает текст
-   ↓
-3. Добавляет в voice_input_queue
-   ↓
-4. AI Processing Thread берет текст
-   ↓
-5. Добавляет в историю, сохраняет
-   ↓
-6. Отправляет к OpenRouter
-   ↓
-7. Streaming ответ собирается в StreamChunkBuffer
-   ↓
-8. Обнаружены Tool Calls → выполняются параллельно
-   ↓
-9. Результаты Tool Calls отправляются обратно к ИИ
-   ↓
-10. Получен финальный ответ
-    ↓
-11. Добавлено в историю, сохранено
-    ↓
-12. Добавлено в ai_response_queue
-    ↓
-13. Playback Thread берет ответ
-    ↓
-14. Синтезирует TTS
-    ↓
-15. Воспроизводит звук
-    ↓
-16. Возвращается к шагу 1
-```
-
----
-
-## 📝 Логирование
-
-Все события логируются в `app/config/logs.log`:
-
-```bash
-tail -f app/config/logs.log
-```
-
-Уровни:
-- **DEBUG** - Детальная отладочная информация
-- **INFO** - Основные события (хорошее для мониторинга)
-- **WARNING** - Предупреждения
-- **ERROR** - Ошибки
-
-Emoji для быстрого сканирования:
-```
-🎙️ Главное приложение
-🎤 Запись активна
-🔤 Текст распознан
-📝 Сообщение сохранено
-📤 Отправка к ИИ
-✅ Успех
-❌ Ошибка
-⚠️ Предупреждение
-🔊 Воспроизведение
-🤖 Ответ ИИ
-```
-
----
-
-## 🐛 Решение проблем
-
-### "Микрофон не найден"
-```bash
-python app/main.py  # Выведет список доступных
-```
-
-### "OPENROUTER_API_KEY не установлен"
-```bash
-echo %OPENROUTER_API_KEY%  # Проверить переменную
-```
-
-### "Модели скачиваются долго" (первый запуск)
-- Это нормально, требуется 5-30 секунд
-- Модели кэшируются в `app/model/`
-
-### Нет звука из TTS
-- Проверьте громкость ОС
-- Убедитесь, что динамики включены
-- Приложение продолжит работу даже если TTS не инициализирован
-
----
-
-## 📚 Документация
-
-| Документ | Для кого |
-|----------|----------|
-| [QUICKSTART.md](QUICKSTART.md) | Новые пользователи (5 минут) |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Разработчики (понимание системы) |
-| [EXAMPLES.md](EXAMPLES.md) | Программисты (13 примеров кода) |
-| [.github/copilot-instructions.md](.github/copilot-instructions.md) | AI агенты (для разработки) |
-
----
-
-## 🚀 Следующие шаги
-
-1. **Запустить приложение** → [QUICKSTART.md](QUICKSTART.md)
-2. **Изучить архитектуру** → [ARCHITECTURE.md](ARCHITECTURE.md)
-3. **Посмотреть примеры** → [EXAMPLES.md](EXAMPLES.md)
-4. **Добавить инструменты** → Редактировать `get_tool_handlers()`
-5. **Поддержка других LLM** → Создать класс наподобие `OpenRouterHandler`
-
----
-
-## ✨ Основные преимущества
-
-✅ **Параллельная работа** - Все компоненты работают одновременно  
-✅ **Быстрая реакция** - Tool calls выполняются параллельно  
-✅ **Стабильность** - Thread-safe очереди, graceful shutdown  
-✅ **Расширяемость** - Легко добавить новые бэкенды и провайдеров  
-✅ **Отладка** - Подробное логирование всех событий  
-✅ **Документация** - Четыре файла с примерами и инструкциями  
-
----
-
-## 📦 Зависимости
-
-```
-openai>=1.3.0           # OpenRouter via OpenAI SDK
-torch>=2.4.1            # Silero TTS
-vosk==0.3.45            # STT
-openai-whisper>=20250625 # STT альтернатива
-pygame>=2.5.0           # Воспроизведение звука
-SpeechRecognition>=3.14 # STT
-```
-
----
-
-**Версия**: 2.0 (переработанная архитектура)  
-**Дата**: Январь 2026  
-**Язык**: Python 3.8+  
-
-🎉 **Готово к использованию!**
+[![Stargazers over time](https://starchart.cc/XTLS/Xray-core.svg)](https://starchart.cc/XTLS/Xray-core)
